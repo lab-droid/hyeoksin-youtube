@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
-import { Loader2, Sparkles, Play, Image as ImageIcon, Video, RefreshCw, CheckSquare, Square, Download, Mic, Check } from 'lucide-react';
+import { Loader2, Sparkles, Play, Image as ImageIcon, Video, RefreshCw, CheckSquare, Square, Download, Mic, Check, Youtube, HelpCircle, PlusCircle, X } from 'lucide-react';
 import { generateScript, generateAudio, generateImage, generateVideo, Cut, Ratio, Style, Voice, CharacterEthnicity, CharacterAge, CharacterGender, setCustomApiKey } from './lib/api';
 
 function ApiKeyModal({ isOpen, onClose, onKeySelected, currentKey }: { isOpen: boolean, onClose: () => void, onKeySelected: (key: string) => void, currentKey: string }) {
@@ -65,6 +65,8 @@ function ApiKeyModal({ isOpen, onClose, onKeySelected, currentKey }: { isOpen: b
 export default function App() {
   const [hasKey, setHasKey] = useState(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [currentApiKey, setCurrentApiKey] = useState('');
 
   useEffect(() => {
@@ -97,6 +99,13 @@ export default function App() {
   const [currentCutIndex, setCurrentCutIndex] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const isPlayingRef = useRef(isPlaying);
+  const currentCutIndexRef = useRef(currentCutIndex);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+    currentCutIndexRef.current = currentCutIndex;
+  }, [isPlaying, currentCutIndex]);
 
   const [currentStep, setCurrentStep] = useState(1);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
@@ -142,6 +151,37 @@ export default function App() {
     } else {
       showToast(defaultMessage, 'error');
     }
+  };
+
+  const handleReset = () => {
+    setIsResetModalOpen(true);
+  };
+
+  const executeReset = () => {
+    setTopic('');
+    setDuration(30);
+    setRatio('16:9');
+    setStyle('실제 사진');
+    setCharacterEthnicity('선택 안함');
+    setCharacterAge('선택 안함');
+    setCharacterGender('선택 안함');
+    setCuts([]);
+    setVoice('Kore');
+    setIsGenerating(false);
+    setPreviewing(false);
+    setIncludeSubtitles(true);
+    setIsPlaying(false);
+    setCurrentCutIndex(0);
+    setCurrentStep(1);
+    setIsAutoGenerating(false);
+    setAutoProgress(0);
+    setAutoStatusText('');
+    setReferenceImages([]);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    setIsResetModalOpen(false);
   };
 
   const handleGenerateScript = async () => {
@@ -366,6 +406,23 @@ export default function App() {
     setIsPlaying(true);
     setCurrentCutIndex(0);
     
+    // Initialize audio context synchronously to preserve user gesture
+    let audioCtx: AudioContext | null = null;
+    let audioClone: HTMLAudioElement | null = null;
+    let dest: MediaStreamAudioDestinationNode | null = null;
+    try {
+      audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      dest = audioCtx.createMediaStreamDestination();
+      audioClone = new Audio(cuts[0].audioUrl);
+      audioClone.crossOrigin = "anonymous";
+      audioClone.play().catch(e => console.warn('Audio clone play failed', e));
+      const source = audioCtx.createMediaElementSource(audioClone);
+      source.connect(dest);
+      source.connect(audioCtx.destination);
+    } catch (e) {
+      console.warn('Audio mixing not supported or failed', e);
+    }
+    
     setTimeout(async () => {
       if (!videoRef.current || !audioRef.current) return;
       
@@ -390,40 +447,42 @@ export default function App() {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       
-      const stream = canvas.captureStream(30);
+      const stream = (canvas as any).captureStream ? (canvas as any).captureStream(30) : (canvas as any).webkitCaptureStream ? (canvas as any).webkitCaptureStream(30) : null;
+      if (!stream) {
+        showToast('이 브라우저에서는 영상 렌더링을 지원하지 않습니다. Chrome을 사용해주세요.', 'error');
+        setIsPlaying(false);
+        return;
+      }
       
       // Audio mixing
-      try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const dest = audioCtx.createMediaStreamDestination();
-        
-        // Use a clone of the audio element to avoid InvalidStateError on multiple downloads
-        const audioClone = new Audio(audioRef.current.src);
-        audioClone.crossOrigin = "anonymous";
-        audioClone.play();
-        
-        const source = audioCtx.createMediaElementSource(audioClone);
-        source.connect(dest);
-        source.connect(audioCtx.destination); // Also play to speakers
-        
+      if (dest && audioClone) {
         dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-        
-        // Sync clone with main audio
         audioRef.current.muted = true; // Mute main audio so we don't hear double
         
-        // When cut changes, update clone src
         const syncAudio = () => {
-          if (audioClone.src !== audioRef.current?.src) {
-            audioClone.src = audioRef.current?.src || '';
-            audioClone.play();
+          if (audioClone!.src !== audioRef.current?.src) {
+            audioClone!.src = audioRef.current?.src || '';
+            audioClone!.play().catch(e => console.warn(e));
           }
         };
         audioRef.current.addEventListener('play', syncAudio);
-      } catch (e) {
-        console.warn('Audio mixing not supported or failed', e);
       }
       
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+      let mimeType = 'video/webm;codecs=vp9';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp8';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'video/webm';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'video/mp4';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+              mimeType = '';
+            }
+          }
+        }
+      }
+      
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       const chunks: Blob[] = [];
       
       recorder.ondataavailable = e => {
@@ -431,11 +490,17 @@ export default function App() {
       };
       
       recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
+        if (audioRef.current) audioRef.current.muted = false;
+        if (audioClone) {
+          audioClone.pause();
+          audioClone.src = '';
+        }
+        const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `youtube_shorts_final_${resolution}_${Date.now()}.webm`;
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        a.download = `youtube_shorts_final_${resolution}_${Date.now()}.${ext}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -443,24 +508,55 @@ export default function App() {
         showToast('다운로드가 완료되었습니다.', 'success');
       };
       
-      recorder.start();
+      try {
+        recorder.start();
+      } catch (e) {
+        console.error('Failed to start recorder', e);
+        showToast('영상 렌더링에 실패했습니다. 브라우저가 지원하지 않는 형식일 수 있습니다.', 'error');
+        setIsPlaying(false);
+        return;
+      }
       
       const drawFrame = () => {
         if (ctx && videoRef.current) {
-          ctx.drawImage(videoRef.current, 0, 0, width, height);
+          // object-cover logic
+          const videoRatio = videoRef.current.videoWidth / videoRef.current.videoHeight;
+          const canvasRatio = width / height;
+          let drawWidth = width;
+          let drawHeight = height;
+          let offsetX = 0;
+          let offsetY = 0;
+
+          if (videoRatio > canvasRatio) {
+            drawWidth = height * videoRatio;
+            offsetX = (width - drawWidth) / 2;
+          } else {
+            drawHeight = width / videoRatio;
+            offsetY = (height - drawHeight) / 2;
+          }
+
+          // Clear canvas first
+          ctx.fillStyle = 'black';
+          ctx.fillRect(0, 0, width, height);
+          
+          // Draw video as cover background
+          ctx.drawImage(videoRef.current, offsetX, offsetY, drawWidth, drawHeight);
           
           if (includeSubtitles) {
-            const text = cuts[currentCutIndex]?.text || '';
+            const text = cuts[currentCutIndexRef.current]?.text || '';
+            // Subtitle background
             ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.fillRect(0, height - (height * 0.18), width, height * 0.1);
+            ctx.fillRect(0, height - (height * 0.18), width, height * 0.18); // Fill to the bottom
+            
+            // Subtitle text
             ctx.fillStyle = 'white';
             ctx.font = `bold ${Math.round(height * 0.04)}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(text, width / 2, height - (height * 0.13));
+            ctx.fillText(text, width / 2, height - (height * 0.09));
           }
         }
-        if (isPlaying) {
+        if (isPlayingRef.current) {
           requestAnimationFrame(drawFrame);
         }
       };
@@ -469,8 +565,10 @@ export default function App() {
       
       // Stop recorder when all cuts are done
       const checkEnd = setInterval(() => {
-        if (!isPlaying) {
-          recorder.stop();
+        if (!isPlayingRef.current) {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+          }
           clearInterval(checkEnd);
         }
       }, 1000);
@@ -504,6 +602,59 @@ export default function App() {
         onKeySelected={handleKeySelected} 
         currentKey={currentApiKey} 
       />
+
+      {isHelpModalOpen && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 p-8 rounded-2xl max-w-2xl w-full border border-white/10 relative shadow-2xl">
+            <button onClick={() => setIsHelpModalOpen(false)} className="absolute top-4 right-4 text-zinc-400 hover:text-white transition-colors">
+              <X className="w-6 h-6" />
+            </button>
+            <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+              <HelpCircle className="w-6 h-6 text-red-500" />
+              사용 방법
+            </h2>
+            <div className="space-y-4 text-zinc-300 text-sm leading-relaxed max-h-[60vh] overflow-y-auto pr-2">
+              <p><strong className="text-white">1. API 키 설정:</strong> 좌측 하단의 'API KEY 설정' 버튼을 눌러 Gemini API 키를 입력합니다.</p>
+              <p><strong className="text-white">2. 주제 입력:</strong> 만들고 싶은 영상의 주제를 입력하고 영상 비율, 스타일 등을 선택합니다.</p>
+              <p><strong className="text-white">3. 대본 생성:</strong> '대본 생성' 버튼을 누르면 AI가 자동으로 컷별 대본과 이미지/영상 프롬프트를 작성합니다.</p>
+              <p><strong className="text-white">4. 음성/이미지/영상 생성:</strong> 각 단계별로 생성 버튼을 누르거나, '전체 자동화' 버튼을 눌러 한 번에 모든 소스를 생성합니다.</p>
+              <p><strong className="text-white">5. 최종 확인 및 렌더링:</strong> 마지막 단계에서 생성된 영상을 미리보기하고, 원하는 화질로 다운로드합니다.</p>
+              <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                <p className="text-red-400 font-medium mb-1 flex items-center gap-1">💡 팁</p>
+                <ul className="list-disc list-inside space-y-1 text-red-300/80">
+                  <li>참조 이미지를 업로드하면 생성되는 이미지와 영상의 스타일을 일정하게 유지할 수 있습니다.</li>
+                  <li>마음에 들지 않는 컷은 각 단계에서 개별적으로 '재생성'할 수 있습니다.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isResetModalOpen && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 p-8 rounded-2xl max-w-sm w-full border border-white/10 relative shadow-2xl text-center">
+            <h2 className="text-xl font-bold text-white mb-4">새로 만들기</h2>
+            <p className="text-zinc-400 mb-6 text-sm">
+              모든 작업 내용이 초기화됩니다.<br/>새로 만드시겠습니까?
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button 
+                onClick={() => setIsResetModalOpen(false)}
+                className="px-6 py-2 rounded-lg bg-zinc-800 text-white hover:bg-zinc-700 transition-colors text-sm font-medium"
+              >
+                취소
+              </button>
+              <button 
+                onClick={executeReset}
+                className="px-6 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors text-sm font-medium"
+              >
+                초기화
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {isAutoGenerating && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -561,8 +712,8 @@ export default function App() {
       {/* Sidebar */}
       <aside className="w-64 border-r border-white/10 bg-zinc-900/50 flex flex-col fixed inset-y-0 left-0 z-40">
         <div className="h-16 flex items-center gap-3 px-6 border-b border-white/10">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Sparkles className="w-5 h-5 text-white" />
+          <div className="w-8 h-8 rounded-lg bg-red-600 flex items-center justify-center shadow-lg shadow-red-500/20">
+            <Youtube className="w-5 h-5 text-white" />
           </div>
           <h1 className="text-lg font-bold tracking-tight">혁신 유튜브 AI</h1>
         </div>
@@ -603,6 +754,23 @@ export default function App() {
           })}
         </nav>
         
+        <div className="p-4 space-y-2 border-t border-white/10">
+          <button
+            onClick={handleReset}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-white/5"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>새로 만들기</span>
+          </button>
+          <button
+            onClick={() => setIsHelpModalOpen(true)}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-medium bg-zinc-800/50 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-white/5"
+          >
+            <HelpCircle className="w-4 h-4" />
+            <span>사용방법</span>
+          </button>
+        </div>
+
         {/* API Key Status */}
         <div className="p-4 border-t border-white/10">
           <button
@@ -1083,15 +1251,15 @@ export default function App() {
                     ref={videoRef}
                     src={cuts[currentCutIndex].videoUrl}
                     onEnded={handleVideoEnded}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-cover"
                   />
                   <audio 
                     ref={audioRef}
                     src={cuts[currentCutIndex].audioUrl}
                   />
                   {includeSubtitles && (
-                    <div className="absolute bottom-8 left-0 right-0 flex justify-center px-8">
-                      <div className="bg-black/80 text-white px-4 py-2 rounded-lg text-lg font-bold text-center max-w-2xl">
+                    <div className="absolute bottom-0 left-0 right-0 h-[18%] bg-black/80 flex items-center justify-center px-8">
+                      <div className="text-white text-lg sm:text-2xl font-bold text-center max-w-2xl">
                         {cuts[currentCutIndex].text}
                       </div>
                     </div>

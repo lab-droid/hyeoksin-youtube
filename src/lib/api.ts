@@ -153,7 +153,7 @@ export async function generateVideo(imageUri: string, prompt: string, ratio: str
   const mimeType = imageUri.split(';')[0].split(':')[1] || 'image/png';
   const base64Data = imageUri.split(',')[1];
   let aspectRatio = ratio === '9:16' ? '9:16' : '16:9';
-  let resolution = '1080p';
+  let resolution = '720p'; // Use 720p for better compatibility with image-to-video generation
 
   const safePrompt = prompt && prompt.trim() !== '' ? prompt : 'A beautiful scene with subtle motion';
 
@@ -171,18 +171,30 @@ export async function generateVideo(imageUri: string, prompt: string, ratio: str
         aspectRatio: aspectRatio as any
       },
     });
-  }, 5, 5000); // Increased retries and delay for video generation
+  }, 3, 5000);
 
   while (!operation.done) {
     await new Promise(resolve => setTimeout(resolve, 10000));
     operation = await withRetry(() => ai.operations.getVideosOperation({ operation }));
   }
 
-  const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-  if (!downloadLink) throw new Error('Failed to generate video');
+  if (operation.error) {
+    console.error('Video generation operation error:', operation.error);
+    throw new Error(`Video generation failed: ${operation.error.message || JSON.stringify(operation.error)}`);
+  }
 
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  const response = await withRetry(() => fetch(downloadLink, { headers: { 'x-goog-api-key': apiKey! } }));
+  const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+  if (!downloadLink) {
+    console.error('Operation done but no download link:', operation);
+    throw new Error('Failed to generate video: No download link in response');
+  }
+
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
+  const response = await withRetry(async () => {
+    const res = await fetch(downloadLink, { headers: { 'x-goog-api-key': apiKey! } });
+    if (!res.ok) throw new Error(`Failed to fetch video: ${res.status} ${res.statusText}`);
+    return res;
+  });
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 }
