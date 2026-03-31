@@ -62,11 +62,76 @@ function ApiKeyModal({ isOpen, onClose, onKeySelected, currentKey }: { isOpen: b
   );
 }
 
+function ApiCostModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div className="bg-zinc-900 p-8 rounded-2xl max-w-2xl w-full border border-white/10 relative shadow-2xl max-h-[90vh] flex flex-col">
+        <button onClick={onClose} className="absolute top-4 right-4 text-zinc-400 hover:text-white transition-colors">
+          <X className="w-6 h-6" />
+        </button>
+        <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+          <span className="text-emerald-500">💰</span> API 비용 안내
+        </h2>
+        <div className="space-y-6 text-zinc-300 text-sm leading-relaxed overflow-y-auto pr-2 flex-1 custom-scrollbar">
+          
+          <div className="bg-zinc-800/50 p-4 rounded-xl border border-white/5">
+            <h3 className="text-lg font-semibold text-white mb-4">생성 결과물별 예상 소모 비용</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-medium text-emerald-400 mb-1">🟢 대본(스크립트) 기획안만 생성</h4>
+                <p className="text-zinc-400">Gemini 3.1 Pro 모델 사용. 텍스트 프롬프트 입력 및 대본 출력.</p>
+                <p className="font-semibold text-white mt-1">예상 비용: 약 10원 / 건</p>
+              </div>
+              
+              <div>
+                <h4 className="font-medium text-yellow-400 mb-1">🟡 숏폼(Shorts)용 5컷짜리 '이미지+음성' 영상 제작</h4>
+                <p className="text-zinc-400">대본 생성 + 음성 5번 + 이미지 5장 생성.</p>
+                <p className="font-semibold text-white mt-1">예상 비용: 약 215원 / 건</p>
+              </div>
+
+              <div>
+                <h4 className="font-medium text-orange-400 mb-1">🟠 숏폼용 5컷짜리 '고품질 비디오+음성' 영상 제작</h4>
+                <p className="text-zinc-400">대본 생성 + 음성 5번 + 이미지 5장 + 비디오 5클립 생성 (Veo 3.1).</p>
+                <p className="font-semibold text-white mt-1">예상 비용: 약 715원 / 건</p>
+              </div>
+
+              <div>
+                <h4 className="font-medium text-red-400 mb-1">🔴 롱폼 10분 분량 '고품질 비디오+음성' 영상 제작</h4>
+                <p className="text-zinc-400">대본 생성 + 음성 100번 + 이미지 100장 + 비디오 100클립 생성 (약 100컷 기준).</p>
+                <p className="font-semibold text-white mt-1">예상 비용: 약 14,000원 ~ 17,000원 / 건</p>
+              </div>
+
+              <div>
+                <h4 className="font-medium text-purple-400 mb-1">🔥 롱폼 20분 분량 '고품질 비디오+음성' 영상 제작</h4>
+                <p className="text-zinc-400">대본 생성 + 음성 200번 + 이미지 200장 + 비디오 200클립 생성 (약 200컷 기준).</p>
+                <p className="font-semibold text-white mt-1">예상 비용: 약 28,000원 ~ 34,000원 / 건</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-indigo-500/10 p-4 rounded-xl border border-indigo-500/20">
+            <h3 className="text-lg font-semibold text-indigo-300 mb-2">💡 비용 최적화 팁</h3>
+            <ul className="list-disc list-inside text-indigo-200/80 space-y-1 ml-2">
+              <li>모든 컷을 비디오로 만들면 비용이 크게 증가합니다. 필요한 컷만 비디오로 생성하세요.</li>
+              <li>이미지와 음성만으로 구성된 슬라이드쇼 형태의 영상을 제작하면 비용을 1/5 수준으로 절감할 수 있습니다.</li>
+            </ul>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [hasKey, setHasKey] = useState(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isApiCostModalOpen, setIsApiCostModalOpen] = useState(false);
   const [currentApiKey, setCurrentApiKey] = useState('');
 
   useEffect(() => {
@@ -603,6 +668,11 @@ export default function App() {
         currentKey={currentApiKey} 
       />
 
+      <ApiCostModal
+        isOpen={isApiCostModalOpen}
+        onClose={() => setIsApiCostModalOpen(false)}
+      />
+
       {isHelpModalOpen && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-900 p-8 rounded-2xl max-w-2xl w-full border border-white/10 relative shadow-2xl">
@@ -791,7 +861,18 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 ml-64 p-8 max-w-4xl mx-auto w-full">
+      <main className="flex-1 ml-64 p-8 max-w-4xl mx-auto w-full relative">
+        
+        {/* Top Right API Cost Button */}
+        <div className="absolute top-8 right-8 z-30">
+          <button 
+            onClick={() => setIsApiCostModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-full text-sm font-medium border border-white/10 backdrop-blur-md transition-all shadow-lg"
+          >
+            <span className="text-emerald-400">💰</span> API 비용
+          </button>
+        </div>
+
         {/* Hero Banner */}
         <div className="w-full aspect-video max-h-[280px] rounded-3xl overflow-hidden relative mb-8 border border-white/10 shadow-2xl flex-shrink-0 group bg-zinc-950">
           {/* YouTube Logo SVG Background */}
