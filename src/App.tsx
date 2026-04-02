@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
 import { Loader2, Sparkles, Play, Image as ImageIcon, Video, RefreshCw, CheckSquare, Square, Download, Mic, Check, Youtube, HelpCircle, PlusCircle, X } from 'lucide-react';
-import { generateScript, generateAudio, generateImage, generateVideo, Cut, Ratio, Style, Voice, CharacterEthnicity, CharacterAge, CharacterGender, setCustomApiKey } from './lib/api';
+import { generateScript, oneTouchPlan, generateAudio, generateImage, generateVideo, Cut, Ratio, Style, Voice, CharacterEthnicity, CharacterAge, CharacterGender, setCustomApiKey } from './lib/api';
 
 function ApiKeyModal({ isOpen, onClose, onKeySelected, currentKey }: { isOpen: boolean, onClose: () => void, onKeySelected: (key: string) => void, currentKey: string }) {
   const [manualKey, setManualKey] = useState(currentKey);
@@ -126,6 +126,45 @@ function ApiCostModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => voi
   );
 }
 
+function RenderingModal({ isOpen, progress }: { isOpen: boolean, progress: number }) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100] p-4 backdrop-blur-sm">
+      <div className="bg-zinc-900 p-10 rounded-3xl max-w-md w-full text-center border border-white/10 shadow-2xl animate-in zoom-in-95 duration-300">
+        <div className="relative w-24 h-24 mx-auto mb-8">
+          <div className="absolute inset-0 rounded-full border-4 border-zinc-800" />
+          <div 
+            className="absolute inset-0 rounded-full border-4 border-indigo-500 border-t-transparent animate-spin" 
+            style={{ animationDuration: '2s' }}
+          />
+          <div className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-white">
+            {progress}%
+          </div>
+        </div>
+        
+        <h2 className="text-2xl font-bold text-white mb-3">영상 렌더링 중...</h2>
+        <p className="text-zinc-400 mb-8 text-sm leading-relaxed">
+          고화질 영상을 병합하여 MP4 파일로 변환하고 있습니다.<br />
+          영상의 길이에 따라 몇 분 정도 소요될 수 있으니,<br />
+          <span className="text-indigo-400 font-semibold">브라우저 창을 닫지 말고 기다려주세요.</span>
+        </p>
+        
+        <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden mb-2">
+          <div 
+            className="bg-indigo-500 h-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-zinc-500 font-medium uppercase tracking-wider">
+          <span>Processing</span>
+          <span>Finalizing</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [hasKey, setHasKey] = useState(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
@@ -158,6 +197,9 @@ export default function App() {
   const [cuts, setCuts] = useState<Cut[]>([]);
   const [voice, setVoice] = useState<Voice>('Kore');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
+  const [renderingProgress, setRenderingProgress] = useState(0);
   const [previewing, setPreviewing] = useState(false);
   const [includeSubtitles, setIncludeSubtitles] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -267,6 +309,32 @@ export default function App() {
       handleError(e, '대본 생성 중 오류가 발생했습니다.');
     }
     setIsGenerating(false);
+  };
+
+  const handleOneTouchPlanning = async () => {
+    if (!hasKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+    if (referenceImages.length === 0) {
+      showToast('먼저 참고 이미지를 업로드해주세요.', 'error');
+      return;
+    }
+    setIsPlanning(true);
+    try {
+      const result = await oneTouchPlan(referenceImages);
+      if (result.topic) setTopic(result.topic);
+      if (result.cuts && result.cuts.length > 0) {
+        setCuts(result.cuts.map((c: any, i: number) => ({ ...c, id: `cut-${i}` })));
+        showToast('이미지를 분석하여 주제와 대본을 생성했습니다.', 'success');
+        setCurrentStep(2);
+      } else {
+        throw new Error('기획안 생성에 실패했습니다.');
+      }
+    } catch (e: any) {
+      handleError(e, '원터치 기획 중 오류가 발생했습니다.');
+    }
+    setIsPlanning(false);
   };
 
   const handleAutoGenerateAll = async () => {
@@ -466,8 +534,8 @@ export default function App() {
       return;
     }
     
-    showToast(`${resolution} 화질로 최종 영상을 병합하여 다운로드합니다. 이 작업은 영상 길이만큼의 시간이 소요됩니다. 화면을 유지해주세요.`, 'info');
-    
+    setIsRendering(true);
+    setRenderingProgress(0);
     setIsPlaying(true);
     setCurrentCutIndex(0);
     
@@ -516,6 +584,7 @@ export default function App() {
       if (!stream) {
         showToast('이 브라우저에서는 영상 렌더링을 지원하지 않습니다. Chrome을 사용해주세요.', 'error');
         setIsPlaying(false);
+        setIsRendering(false);
         return;
       }
       
@@ -533,17 +602,18 @@ export default function App() {
         audioRef.current.addEventListener('play', syncAudio);
       }
       
-      let mimeType = 'video/webm;codecs=vp9';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm;codecs=vp8';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'video/webm';
-          if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'video/mp4';
-            if (!MediaRecorder.isTypeSupported(mimeType)) {
-              mimeType = '';
-            }
-          }
+      const types = [
+        'video/mp4',
+        'video/webm;codecs=h264',
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm'
+      ];
+      let mimeType = '';
+      for (const type of types) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
         }
       }
       
@@ -564,12 +634,13 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        const ext = (mimeType.includes('mp4') || mimeType.includes('h264')) ? 'mp4' : 'webm';
         a.download = `youtube_shorts_final_${resolution}_${Date.now()}.${ext}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        setIsRendering(false);
         showToast('다운로드가 완료되었습니다.', 'success');
       };
       
@@ -579,9 +650,13 @@ export default function App() {
         console.error('Failed to start recorder', e);
         showToast('영상 렌더링에 실패했습니다. 브라우저가 지원하지 않는 형식일 수 있습니다.', 'error');
         setIsPlaying(false);
+        setIsRendering(false);
         return;
       }
       
+      const totalDuration = cuts.reduce((acc, cut) => acc + (audioRef.current?.duration || 5), 0);
+      let startTime = Date.now();
+
       const drawFrame = () => {
         if (ctx && videoRef.current) {
           // object-cover logic
@@ -620,8 +695,14 @@ export default function App() {
             ctx.textBaseline = 'middle';
             ctx.fillText(text, width / 2, height - (height * 0.09));
           }
+
+          // Update progress
+          const elapsed = (Date.now() - startTime) / 1000;
+          const progress = Math.min(Math.round((elapsed / totalDuration) * 100), 99);
+          setRenderingProgress(progress);
         }
-        if (isPlayingRef.current) {
+        
+        if (recorder.state === 'recording') {
           requestAnimationFrame(drawFrame);
         }
       };
@@ -671,6 +752,11 @@ export default function App() {
       <ApiCostModal
         isOpen={isApiCostModalOpen}
         onClose={() => setIsApiCostModalOpen(false)}
+      />
+
+      <RenderingModal 
+        isOpen={isRendering} 
+        progress={renderingProgress} 
       />
 
       {isHelpModalOpen && (
@@ -964,8 +1050,23 @@ export default function App() {
 
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-zinc-400">참고 이미지 (선택, 최대 20장)</label>
-                <span className="text-xs text-zinc-500">{referenceImages.length} / 20</span>
+                <label className="text-sm font-medium text-zinc-400 flex items-center gap-2">
+                  이미지로 생성 / 참고 이미지 (선택, 최대 20장)
+                  <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 text-[10px] font-bold rounded-full border border-indigo-500/20">NEW</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  {referenceImages.length > 0 && (
+                    <button 
+                      onClick={handleOneTouchPlanning}
+                      disabled={isPlanning || isGenerating || isAutoGenerating}
+                      className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/10"
+                    >
+                      {isPlanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      원터치 기획
+                    </button>
+                  )}
+                  <span className="text-xs text-zinc-500">{referenceImages.length} / 20</span>
+                </div>
               </div>
               <div className="flex flex-wrap gap-3">
                 {referenceImages.map((img, i) => (

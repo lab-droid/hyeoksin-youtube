@@ -93,7 +93,7 @@ export async function generateScript(topic: string, duration: number, ratio: str
   Return JSON array.` });
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+    model: 'gemini-3-flash-preview',
     contents: [{ parts }],
     config: {
       responseMimeType: 'application/json',
@@ -113,6 +113,50 @@ export async function generateScript(topic: string, duration: number, ratio: str
   }));
 
   return JSON.parse(response.text || '[]');
+}
+
+export async function oneTouchPlan(images: string[]) {
+  const ai = getAi();
+  const parts: any[] = [];
+  
+  parts.push({ text: "Analyze these images and suggest a creative YouTube video topic and a full script (cuts). Return JSON with 'topic' and 'cuts' (array of {text, imagePrompt, videoPrompt}). The language should be Korean for 'topic' and 'text', and English for 'imagePrompt' and 'videoPrompt'." });
+  
+  images.forEach(img => {
+    const mimeType = img.split(';')[0].split(':')[1];
+    const data = img.split(',')[1];
+    parts.push({
+      inlineData: { data, mimeType }
+    });
+  });
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: [{ parts }],
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          topic: { type: Type.STRING },
+          cuts: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                text: { type: Type.STRING },
+                imagePrompt: { type: Type.STRING },
+                videoPrompt: { type: Type.STRING },
+              },
+              required: ['text', 'imagePrompt', 'videoPrompt'],
+            }
+          }
+        },
+        required: ['topic', 'cuts']
+      }
+    }
+  }));
+
+  return JSON.parse(response.text || '{}');
 }
 
 export async function generateAudio(text: string, voiceName: string) {
