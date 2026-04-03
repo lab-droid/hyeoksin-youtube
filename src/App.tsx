@@ -219,11 +219,78 @@ export default function App() {
   const [autoProgress, setAutoProgress] = useState(0);
   const [autoStatusText, setAutoStatusText] = useState('');
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  const [isManualGenerating, setIsManualGenerating] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'error' | 'info' | 'success' } | null>(null);
 
   const showToast = (message: string, type: 'error' | 'info' | 'success' = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 5000);
+  };
+
+  const handleManualProceed = async () => {
+    if (!hasKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+    if (!topic) {
+      showToast('주제를 입력해주세요.', 'error');
+      return;
+    }
+
+    setIsManualGenerating(true);
+    setAutoProgress(0);
+    try {
+      if (currentStep === 1) {
+        // Step 1 -> 2: Generate Script
+        setAutoStatusText('대본 생성 중...');
+        await handleGenerateScript();
+      } else if (currentStep === 2) {
+        // Step 2 -> 3: Generate All Audios
+        setAutoStatusText('모든 컷의 음성을 생성합니다...');
+        const newCuts = [...cuts];
+        for (let i = 0; i < newCuts.length; i++) {
+          if (!newCuts[i].audioUrl) {
+            const url = await generateAudio(newCuts[i].text, voice);
+            newCuts[i].audioUrl = url;
+            setCuts([...newCuts]);
+          }
+          setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
+        }
+        setCurrentStep(3);
+      } else if (currentStep === 3) {
+        // Step 3 -> 4: Generate All Images
+        setAutoStatusText('모든 컷의 이미지를 생성합니다...');
+        const newCuts = [...cuts];
+        for (let i = 0; i < newCuts.length; i++) {
+          if (!newCuts[i].imageUrl) {
+            const url = await generateImage(newCuts[i].imagePrompt, ratio);
+            newCuts[i].imageUrl = url;
+            setCuts([...newCuts]);
+          }
+          setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
+        }
+        setCurrentStep(4);
+      } else if (currentStep === 4) {
+        // Step 4 -> 5: Generate All Videos
+        setAutoStatusText('모든 컷의 영상을 생성합니다...');
+        const newCuts = [...cuts];
+        for (let i = 0; i < newCuts.length; i++) {
+          if (!newCuts[i].videoUrl) {
+            const url = await generateVideo(newCuts[i].imageUrl!, newCuts[i].videoPrompt, ratio, referenceImages);
+            newCuts[i].videoUrl = url;
+            setCuts([...newCuts]);
+          }
+          setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
+        }
+        setCurrentStep(5);
+      }
+    } catch (e: any) {
+      handleError(e, '수동 진행 중 오류가 발생했습니다.');
+    } finally {
+      setIsManualGenerating(false);
+      setAutoProgress(0);
+      setAutoStatusText('');
+    }
   };
 
   const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
@@ -580,8 +647,8 @@ export default function App() {
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       
-      const stream = (canvas as any).captureStream ? (canvas as any).captureStream(30) : (canvas as any).webkitCaptureStream ? (canvas as any).webkitCaptureStream(30) : null;
-      if (!stream) {
+      const canvasStream = (canvas as any).captureStream ? (canvas as any).captureStream(30) : (canvas as any).webkitCaptureStream ? (canvas as any).webkitCaptureStream(30) : null;
+      if (!canvasStream) {
         showToast('이 브라우저에서는 영상 렌더링을 지원하지 않습니다. Chrome을 사용해주세요.', 'error');
         setIsPlaying(false);
         setIsRendering(false);
@@ -590,18 +657,33 @@ export default function App() {
       
       // Audio mixing
       if (dest && audioClone) {
-        dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
         audioRef.current.muted = true; // Mute main audio so we don't hear double
         
         const syncAudio = () => {
-          if (audioClone!.src !== audioRef.current?.src) {
-            audioClone!.src = audioRef.current?.src || '';
-            audioClone!.play().catch(e => console.warn(e));
+          if (audioClone && audioRef.current) {
+            if (audioClone.src !== audioRef.current.src) {
+              audioClone.src = audioRef.current.src;
+              audioClone.currentTime = audioRef.current.currentTime;
+              audioClone.play().catch(e => console.warn('Audio clone sync play failed', e));
+            }
           }
         };
+        
         audioRef.current.addEventListener('play', syncAudio);
+        audioRef.current.addEventListener('timeupdate', () => {
+          if (audioClone && audioRef.current && Math.abs(audioClone.currentTime - audioRef.current.currentTime) > 0.3) {
+            audioClone.currentTime = audioRef.current.currentTime;
+          }
+        });
+        // Also sync on source change
+        audioRef.current.addEventListener('loadedmetadata', syncAudio);
       }
       
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...(dest ? dest.stream.getAudioTracks() : [])
+      ]);
+
       const types = [
         'video/mp4',
         'video/webm;codecs=h264',
@@ -617,7 +699,7 @@ export default function App() {
         }
       }
       
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
       const chunks: Blob[] = [];
       
       recorder.ondataavailable = e => {
@@ -812,7 +894,7 @@ export default function App() {
         </div>
       )}
       
-      {isAutoGenerating && (
+      {(isAutoGenerating || isManualGenerating) && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-900/90 p-8 rounded-3xl border border-white/10 shadow-2xl max-w-lg w-full space-y-8 relative overflow-hidden">
             {/* Background glow */}
@@ -822,8 +904,8 @@ export default function App() {
               <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse" />
               </div>
-              <h2 className="text-2xl font-bold text-white">전체 자동화 진행 중</h2>
-              <p className="text-zinc-400 text-sm">AI가 대본부터 영상까지 모든 과정을 자동으로 처리하고 있습니다.</p>
+              <h2 className="text-2xl font-bold text-white">{isAutoGenerating ? '전체 자동화 진행 중' : '수동 단계 진행 중'}</h2>
+              <p className="text-zinc-400 text-sm">AI가 과정을 처리하고 있습니다.</p>
             </div>
 
             <div className="space-y-6 relative z-10">
@@ -1112,14 +1194,21 @@ export default function App() {
               </div>
               <div className="flex gap-2">
                 <button 
-                  onClick={handleGenerateScript} disabled={isGenerating || isAutoGenerating || !topic}
+                  onClick={handleGenerateScript} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
                   className="h-[50px] px-6 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2"
                 >
                   {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
                   대본 생성
                 </button>
                 <button 
-                  onClick={handleAutoGenerateAll} disabled={isGenerating || isAutoGenerating || !topic}
+                  onClick={handleManualProceed} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
+                  className="h-[50px] px-6 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 border border-white/10"
+                >
+                  {isManualGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
+                  수동으로 순서대로 진행하기
+                </button>
+                <button 
+                  onClick={handleAutoGenerateAll} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
                   className="h-[50px] px-6 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl font-semibold hover:from-indigo-400 hover:to-purple-400 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-indigo-500/20"
                 >
                   {isAutoGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
@@ -1147,8 +1236,17 @@ export default function App() {
               <h2 className="text-2xl font-semibold flex items-center gap-2">
                 <span className="text-indigo-400">2.</span> 음성 생성
               </h2>
-              <button 
-                onClick={async () => {
+              <div className="flex gap-2">
+                <button 
+                  onClick={handleManualProceed}
+                  disabled={isManualGenerating || isAutoGenerating}
+                  className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
+                >
+                  {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  수동으로 다음 단계 진행
+                </button>
+                <button 
+                  onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
                   let completed = 0;
@@ -1175,6 +1273,7 @@ export default function App() {
                 전체 음성 생성
               </button>
             </div>
+          </div>
 
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -1248,8 +1347,17 @@ export default function App() {
               <h2 className="text-2xl font-semibold flex items-center gap-2">
                 <span className="text-indigo-400">3.</span> 이미지 생성
               </h2>
-              <button 
-                onClick={async () => {
+              <div className="flex gap-2">
+                <button 
+                  onClick={handleManualProceed}
+                  disabled={isManualGenerating || isAutoGenerating}
+                  className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
+                >
+                  {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  수동으로 다음 단계 진행
+                </button>
+                <button 
+                  onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
                   let completed = 0;
@@ -1276,6 +1384,7 @@ export default function App() {
                 전체 이미지 생성
               </button>
             </div>
+          </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {cuts.map((cut, index) => (
@@ -1321,8 +1430,17 @@ export default function App() {
               <h2 className="text-2xl font-semibold flex items-center gap-2">
                 <span className="text-indigo-400">4.</span> 영상 생성
               </h2>
-              <button 
-                onClick={async () => {
+              <div className="flex gap-2">
+                <button 
+                  onClick={handleManualProceed}
+                  disabled={isManualGenerating || isAutoGenerating}
+                  className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
+                >
+                  {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  수동으로 다음 단계 진행
+                </button>
+                <button 
+                  onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
                   let completed = 0;
@@ -1349,6 +1467,7 @@ export default function App() {
                 전체 영상 생성
               </button>
             </div>
+          </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {cuts.map((cut, index) => (
