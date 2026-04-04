@@ -165,7 +165,49 @@ function RenderingModal({ isOpen, progress }: { isOpen: boolean, progress: numbe
   );
 }
 
+function InquiryModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
+      <div className="bg-zinc-900 p-8 rounded-2xl max-w-md w-full border border-white/10 relative shadow-2xl">
+        <button onClick={onClose} className="absolute top-4 right-4 text-zinc-400 hover:text-white transition-colors">
+          <X className="w-6 h-6" />
+        </button>
+        <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+          <HelpCircle className="w-6 h-6 text-indigo-400" />
+          오류 및 유지보수 문의
+        </h2>
+        <div className="space-y-4 text-zinc-300 text-sm leading-relaxed">
+          <p>
+            오류 및 유지보수 요청사항이 있으실 경우 아래 메일로 어떤 부분의 오류 개선 또는 유지보수를 요청하시는지 상세하게 기입하여 보내주시면, 정혁신이 실시간으로 확인하여 답변 드리겠습니다.
+          </p>
+          <div className="bg-zinc-950 p-4 rounded-xl border border-white/5 flex items-center justify-between group">
+            <span className="text-indigo-400 font-mono font-medium">info@nextin.ai.kr</span>
+            <button 
+              onClick={() => {
+                navigator.clipboard.writeText('info@nextin.ai.kr');
+                alert('이메일 주소가 복사되었습니다.');
+              }}
+              className="text-xs text-zinc-500 hover:text-white transition-colors"
+            >
+              복사하기
+            </button>
+          </div>
+        </div>
+        <button 
+          onClick={onClose}
+          className="w-full mt-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all"
+        >
+          닫기
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [showInquiryModal, setShowInquiryModal] = useState(false);
   const [hasKey, setHasKey] = useState(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
@@ -193,7 +235,8 @@ export default function App() {
   const [characterAge, setCharacterAge] = useState<CharacterAge>('선택 안함');
   const [characterGender, setCharacterGender] = useState<CharacterGender>('선택 안함');
   const [topic, setTopic] = useState('');
-  const [duration, setDuration] = useState<number>(30);
+  const [duration, setDuration] = useState<number>(5);
+  const [durationCategory, setDurationCategory] = useState<string>('5');
   const [cuts, setCuts] = useState<Cut[]>([]);
   const [voice, setVoice] = useState<Voice>('Kore');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1187,10 +1230,37 @@ export default function App() {
             <div className="flex items-end gap-4">
               <div className="space-y-3 flex-1">
                 <label className="text-sm font-medium text-zinc-400">영상 길이 (초)</label>
-                <input 
-                  type="number" value={duration} onChange={e => setDuration(Number(e.target.value))}
-                  className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+                <div className="flex gap-2">
+                  <select
+                    value={durationCategory}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDurationCategory(val);
+                      if (val !== 'custom') {
+                        setDuration(Number(val));
+                      }
+                    }}
+                    className="flex-1 bg-zinc-950 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="5">5초 (기본)</option>
+                    <option value="15">15초 (쇼츠/릴스/틱톡)</option>
+                    <option value="30">30초 (쇼츠/릴스/틱톡)</option>
+                    <option value="60">60초 (1분 - 숏폼 최대)</option>
+                    <option value="180">180초 (3분 - 유튜브 롱폼)</option>
+                    <option value="300">300초 (5분 - 유튜브 롱폼)</option>
+                    <option value="600">600초 (10분 - 유튜브 롱폼)</option>
+                    <option value="custom">직접 입력</option>
+                  </select>
+                  {durationCategory === 'custom' && (
+                    <input 
+                      type="number" 
+                      value={duration} 
+                      onChange={e => setDuration(Number(e.target.value))}
+                      placeholder="초"
+                      className="w-24 bg-zinc-950 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  )}
+                </div>
               </div>
               <div className="flex gap-2">
                 <button 
@@ -1602,6 +1672,28 @@ export default function App() {
           </section>
         )}
       </main>
+
+      {/* Bottom Right Buttons */}
+      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-40">
+        <a 
+          href="https://hyeoksinai.com" 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 px-4 py-3 bg-white text-black rounded-full font-bold shadow-2xl hover:scale-105 transition-transform text-sm group"
+        >
+          <Sparkles className="w-4 h-4 text-indigo-600 group-hover:animate-pulse" />
+          혁신AI 플랫폼 바로가기
+        </a>
+        <button 
+          onClick={() => setShowInquiryModal(true)}
+          className="flex items-center gap-2 px-4 py-3 bg-zinc-800 text-white rounded-full font-bold shadow-2xl hover:bg-zinc-700 transition-all text-sm border border-white/10"
+        >
+          <HelpCircle className="w-4 h-4 text-indigo-400" />
+          오류 및 유지보수 문의
+        </button>
+      </div>
+
+      <InquiryModal isOpen={showInquiryModal} onClose={() => setShowInquiryModal(false)} />
     </div>
   );
 }
