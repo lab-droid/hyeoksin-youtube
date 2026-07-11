@@ -1,1 +1,23 @@
 @import "tailwindcss";
+
+@keyframes kenburns-a {
+  from { transform: scale(1) translate(0, 0); }
+  to { transform: scale(1.12) translate(-1.5%, 1%); }
+}
+
+@keyframes kenburns-b {
+  from { transform: scale(1.12) translate(1.5%, -1%); }
+  to { transform: scale(1) translate(0, 0); }
+}
+
+.animate-kenburns-a {
+  animation-name: kenburns-a;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.animate-kenburns-b {
+  animation-name: kenburns-b;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}

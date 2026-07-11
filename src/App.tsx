@@ -4,8 +4,27 @@
  */
 
 import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
-import { Loader2, Sparkles, Play, Image as ImageIcon, Video, RefreshCw, CheckSquare, Square, Download, Mic, Check, Youtube, HelpCircle, PlusCircle, X } from 'lucide-react';
-import { generateScript, oneTouchPlan, generateAudio, generateImage, generateVideo, Cut, Ratio, Style, Voice, CharacterEthnicity, CharacterAge, CharacterGender, setCustomApiKey } from './lib/api';
+import { Loader2, Sparkles, Play, Image as ImageIcon, Video, RefreshCw, CheckSquare, Square, Download, Mic, Check, Youtube, HelpCircle, PlusCircle, X, Music, Copy, FileText } from 'lucide-react';
+import { generateScript, oneTouchPlan, generateAudio, generateImage, generateVideo, Cut, Ratio, Style, Voice, CharacterEthnicity, CharacterAge, CharacterGender, ScriptMeta, setCustomApiKey } from './lib/api';
+import { getAudioDuration, buildSRT, buildChapters, getWordList, getActiveWordIndex, drawWrappedCaption, computeKenBurnsRect } from './lib/media';
+import { saveProject, loadProject, clearProject, blobUrlToBlob, StoredCut } from './lib/db';
+
+function getReferenceImagesForCut(cutsArray: Cut[], index: number, userRefs: string[]): string[] {
+  const refs: string[] = [];
+  if (userRefs.length > 0) refs.push(...userRefs.slice(0, 2));
+  if (index > 0 && cutsArray[0]?.imageUrl) refs.push(cutsArray[0].imageUrl);
+  return refs.slice(0, 3);
+}
+
+function loadImageElement(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
 function ApiKeyModal({ isOpen, onClose, onKeySelected, currentKey }: { isOpen: boolean, onClose: () => void, onKeySelected: (key: string) => void, currentKey: string }) {
   const [manualKey, setManualKey] = useState(currentKey);
@@ -75,17 +94,17 @@ function ApiCostModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => voi
           <span className="text-emerald-500">💰</span> API 비용 안내
         </h2>
         <div className="space-y-6 text-zinc-300 text-sm leading-relaxed overflow-y-auto pr-2 flex-1 custom-scrollbar">
-          
+
           <div className="bg-zinc-800/50 p-4 rounded-xl border border-white/5">
             <h3 className="text-lg font-semibold text-white mb-4">생성 결과물별 예상 소모 비용</h3>
-            
+
             <div className="space-y-4">
               <div>
                 <h4 className="font-medium text-emerald-400 mb-1">🟢 대본(스크립트) 기획안만 생성</h4>
                 <p className="text-zinc-400">Gemini 3.1 Pro 모델 사용. 텍스트 프롬프트 입력 및 대본 출력.</p>
                 <p className="font-semibold text-white mt-1">예상 비용: 약 10원 / 건</p>
               </div>
-              
+
               <div>
                 <h4 className="font-medium text-yellow-400 mb-1">🟡 숏폼(Shorts)용 5컷짜리 '이미지+음성' 영상 제작</h4>
                 <p className="text-zinc-400">대본 생성 + 음성 5번 + 이미지 5장 생성.</p>
@@ -115,8 +134,8 @@ function ApiCostModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => voi
           <div className="bg-indigo-500/10 p-4 rounded-xl border border-indigo-500/20">
             <h3 className="text-lg font-semibold text-indigo-300 mb-2">💡 비용 최적화 팁</h3>
             <ul className="list-disc list-inside text-indigo-200/80 space-y-1 ml-2">
-              <li>모든 컷을 비디오로 만들면 비용이 크게 증가합니다. 필요한 컷만 비디오로 생성하세요.</li>
-              <li>이미지와 음성만으로 구성된 슬라이드쇼 형태의 영상을 제작하면 비용을 1/5 수준으로 절감할 수 있습니다.</li>
+              <li>영상이 없는 컷은 이미지 + Ken Burns(줌/팬) 효과로 자동 재생되므로, 모든 컷을 비디오로 만들지 않아도 완성된 영상을 만들 수 있습니다.</li>
+              <li>이미지와 음성만으로 구성하면 비용을 1/5 수준으로 절감할 수 있습니다.</li>
             </ul>
           </div>
 
@@ -134,24 +153,24 @@ function RenderingModal({ isOpen, progress }: { isOpen: boolean, progress: numbe
       <div className="bg-zinc-900 p-10 rounded-3xl max-w-md w-full text-center border border-white/10 shadow-2xl animate-in zoom-in-95 duration-300">
         <div className="relative w-24 h-24 mx-auto mb-8">
           <div className="absolute inset-0 rounded-full border-4 border-zinc-800" />
-          <div 
-            className="absolute inset-0 rounded-full border-4 border-indigo-500 border-t-transparent animate-spin" 
+          <div
+            className="absolute inset-0 rounded-full border-4 border-indigo-500 border-t-transparent animate-spin"
             style={{ animationDuration: '2s' }}
           />
           <div className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-white">
             {progress}%
           </div>
         </div>
-        
+
         <h2 className="text-2xl font-bold text-white mb-3">영상 렌더링 중...</h2>
         <p className="text-zinc-400 mb-8 text-sm leading-relaxed">
           고화질 영상을 병합하여 MP4 파일로 변환하고 있습니다.<br />
           영상의 길이에 따라 몇 분 정도 소요될 수 있으니,<br />
           <span className="text-indigo-400 font-semibold">브라우저 창을 닫지 말고 기다려주세요.</span>
         </p>
-        
+
         <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden mb-2">
-          <div 
+          <div
             className="bg-indigo-500 h-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(99,102,241,0.5)]"
             style={{ width: `${progress}%` }}
           />
@@ -184,7 +203,7 @@ function InquiryModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => voi
           </p>
           <div className="bg-zinc-950 p-4 rounded-xl border border-white/5 flex items-center justify-between group">
             <span className="text-indigo-400 font-mono font-medium">info@nextin.ai.kr</span>
-            <button 
+            <button
               onClick={() => {
                 navigator.clipboard.writeText('info@nextin.ai.kr');
                 alert('이메일 주소가 복사되었습니다.');
@@ -195,7 +214,7 @@ function InquiryModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => voi
             </button>
           </div>
         </div>
-        <button 
+        <button
           onClick={onClose}
           className="w-full mt-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all"
         >
@@ -238,6 +257,11 @@ export default function App() {
   const [duration, setDuration] = useState<number>(5);
   const [durationCategory, setDurationCategory] = useState<string>('5');
   const [cuts, setCuts] = useState<Cut[]>([]);
+  const [scriptMeta, setScriptMeta] = useState<ScriptMeta | null>(null);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | undefined>(undefined);
+  const [isGeneratingThumbnail, setIsGeneratingThumbnail] = useState(false);
+  const [bgmUrl, setBgmUrl] = useState<string | null>(null);
+  const [bgmVolume, setBgmVolume] = useState(20);
   const [voice, setVoice] = useState<Voice>('Kore');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -247,10 +271,15 @@ export default function App() {
   const [includeSubtitles, setIncludeSubtitles] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentCutIndex, setCurrentCutIndex] = useState(0);
+  const [playbackTime, setPlaybackTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const bgmRef = useRef<HTMLAudioElement>(null);
   const isPlayingRef = useRef(isPlaying);
   const currentCutIndexRef = useRef(currentCutIndex);
+  const kenBurnsImagesRef = useRef<Record<string, HTMLImageElement>>({});
+  const saveTimerRef = useRef<number | null>(null);
+  const hasRestoredRef = useRef(false);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -269,6 +298,76 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 5000);
   };
+
+  // Restore a previously auto-saved project (survives refresh / crashed tab).
+  useEffect(() => {
+    if (hasRestoredRef.current) return;
+    hasRestoredRef.current = true;
+    (async () => {
+      const saved = await loadProject();
+      if (saved && saved.cuts && saved.cuts.length > 0) {
+        const restoredCuts: Cut[] = saved.cuts.map((c) => ({
+          id: c.id,
+          text: c.text,
+          imagePrompt: c.imagePrompt,
+          videoPrompt: c.videoPrompt,
+          emotion: c.emotion,
+          audioDuration: c.audioDuration,
+          audioUrl: c.audioBlob ? URL.createObjectURL(c.audioBlob) : undefined,
+          imageUrl: c.imageBlob ? URL.createObjectURL(c.imageBlob) : undefined,
+          videoUrl: c.videoBlob ? URL.createObjectURL(c.videoBlob) : undefined,
+        }));
+        setTopic(saved.topic);
+        setRatio(saved.ratio as Ratio);
+        setStyle(saved.style as Style);
+        setCharacterEthnicity(saved.characterEthnicity as CharacterEthnicity);
+        setCharacterAge(saved.characterAge as CharacterAge);
+        setCharacterGender(saved.characterGender as CharacterGender);
+        setDuration(saved.duration);
+        setDurationCategory(saved.durationCategory);
+        setVoice(saved.voice as Voice);
+        setIncludeSubtitles(saved.includeSubtitles);
+        setBgmVolume(saved.bgmVolume ?? 20);
+        setReferenceImages(saved.referenceImages || []);
+        setScriptMeta(saved.scriptMeta);
+        if (saved.thumbnailBlob) setThumbnailUrl(URL.createObjectURL(saved.thumbnailBlob));
+        setCuts(restoredCuts);
+        setCurrentStep(saved.currentStep || 1);
+        showToast('이전 작업 내용을 자동으로 불러왔습니다.', 'info');
+      }
+    })();
+  }, []);
+
+  // Auto-save the project (debounced) so refreshing the tab never loses generated media.
+  useEffect(() => {
+    if (cuts.length === 0) return;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      (async () => {
+        const storedCuts: StoredCut[] = await Promise.all(cuts.map(async (c) => ({
+          id: c.id,
+          text: c.text,
+          imagePrompt: c.imagePrompt,
+          videoPrompt: c.videoPrompt,
+          emotion: c.emotion,
+          audioDuration: c.audioDuration,
+          audioBlob: await blobUrlToBlob(c.audioUrl),
+          imageBlob: await blobUrlToBlob(c.imageUrl),
+          videoBlob: await blobUrlToBlob(c.videoUrl),
+        })));
+        const thumbnailBlob = await blobUrlToBlob(thumbnailUrl);
+        await saveProject({
+          topic, ratio, style, characterEthnicity, characterAge, characterGender,
+          duration, durationCategory, voice, includeSubtitles, currentStep, bgmVolume,
+          referenceImages, scriptMeta, thumbnailBlob, cuts: storedCuts, savedAt: Date.now(),
+        });
+      })();
+    }, 2000);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cuts, topic, currentStep, scriptMeta, thumbnailUrl, ratio, style, characterEthnicity, characterAge, characterGender, duration, durationCategory, voice, includeSubtitles, bgmVolume, referenceImages]);
 
   const handleManualProceed = async () => {
     if (!hasKey) {
@@ -293,8 +392,9 @@ export default function App() {
         const newCuts = [...cuts];
         for (let i = 0; i < newCuts.length; i++) {
           if (!newCuts[i].audioUrl) {
-            const url = await generateAudio(newCuts[i].text, voice);
-            newCuts[i].audioUrl = url;
+            const url = await generateAudio(newCuts[i].text, voice, newCuts[i].emotion);
+            const dur = await getAudioDuration(url);
+            newCuts[i] = { ...newCuts[i], audioUrl: url, audioDuration: dur };
             setCuts([...newCuts]);
           }
           setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
@@ -306,8 +406,9 @@ export default function App() {
         const newCuts = [...cuts];
         for (let i = 0; i < newCuts.length; i++) {
           if (!newCuts[i].imageUrl) {
-            const url = await generateImage(newCuts[i].imagePrompt, ratio);
-            newCuts[i].imageUrl = url;
+            const refs = getReferenceImagesForCut(newCuts, i, referenceImages);
+            const url = await generateImage(newCuts[i].imagePrompt, ratio, refs, scriptMeta?.characterSheet);
+            newCuts[i] = { ...newCuts[i], imageUrl: url };
             setCuts([...newCuts]);
           }
           setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
@@ -320,7 +421,7 @@ export default function App() {
         for (let i = 0; i < newCuts.length; i++) {
           if (!newCuts[i].videoUrl) {
             const url = await generateVideo(newCuts[i].imageUrl!, newCuts[i].videoPrompt, ratio, referenceImages);
-            newCuts[i].videoUrl = url;
+            newCuts[i] = { ...newCuts[i], videoUrl: url };
             setCuts([...newCuts]);
           }
           setAutoProgress(Math.round(((i + 1) / newCuts.length) * 100));
@@ -358,6 +459,17 @@ export default function App() {
     setReferenceImages(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleBgmUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setBgmUrl(url);
+  };
+
+  const removeBgm = () => {
+    setBgmUrl(null);
+  };
+
   const handleError = (e: any, defaultMessage: string) => {
     console.error(e);
     const errorMessage = e?.message || String(e);
@@ -383,22 +495,29 @@ export default function App() {
     setCharacterAge('선택 안함');
     setCharacterGender('선택 안함');
     setCuts([]);
+    setScriptMeta(null);
+    setThumbnailUrl(undefined);
+    setBgmUrl(null);
+    setBgmVolume(20);
     setVoice('Kore');
     setIsGenerating(false);
     setPreviewing(false);
     setIncludeSubtitles(true);
     setIsPlaying(false);
     setCurrentCutIndex(0);
+    setPlaybackTime(0);
     setCurrentStep(1);
     setIsAutoGenerating(false);
     setAutoProgress(0);
     setAutoStatusText('');
     setReferenceImages([]);
+    kenBurnsImagesRef.current = {};
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
     }
     setIsResetModalOpen(false);
+    clearProject();
   };
 
   const handleGenerateScript = async () => {
@@ -409,11 +528,12 @@ export default function App() {
     if (!topic) return;
     setIsGenerating(true);
     try {
-      const generated = await generateScript(topic, duration, ratio, style, characterEthnicity, characterAge, characterGender, referenceImages);
-      if (!generated || generated.length === 0) {
+      const result = await generateScript(topic, duration, ratio, style, characterEthnicity, characterAge, characterGender, referenceImages);
+      if (!result.cuts || result.cuts.length === 0) {
         throw new Error('대본 생성에 실패했습니다. 다른 주제로 시도해주세요.');
       }
-      setCuts(generated.map((c: any, i: number) => ({ ...c, id: `cut-${i}` })));
+      setScriptMeta(result.meta);
+      setCuts(result.cuts.map((c, i) => ({ ...c, id: `cut-${i}` })));
       setCurrentStep(2); // Move to next step
     } catch (e: any) {
       handleError(e, '대본 생성 중 오류가 발생했습니다.');
@@ -435,7 +555,8 @@ export default function App() {
       const result = await oneTouchPlan(referenceImages);
       if (result.topic) setTopic(result.topic);
       if (result.cuts && result.cuts.length > 0) {
-        setCuts(result.cuts.map((c: any, i: number) => ({ ...c, id: `cut-${i}` })));
+        setScriptMeta(result.meta);
+        setCuts(result.cuts.map((c, i) => ({ ...c, id: `cut-${i}` })));
         showToast('이미지를 분석하여 주제와 대본을 생성했습니다.', 'success');
         setCurrentStep(2);
       } else {
@@ -456,19 +577,22 @@ export default function App() {
     setIsAutoGenerating(true);
     setAutoProgress(0);
     setAutoStatusText('대본 생성 중...');
-    
+
     try {
       let currentCuts = cuts;
+      let currentMeta = scriptMeta;
       if (currentCuts.length === 0) {
-        const generated = await generateScript(topic, duration, ratio, style, characterEthnicity, characterAge, characterGender, referenceImages);
-        if (!generated || generated.length === 0) throw new Error('대본 생성 실패');
-        currentCuts = generated.map((c: any, i: number) => ({ ...c, id: `cut-${i}` }));
+        const result = await generateScript(topic, duration, ratio, style, characterEthnicity, characterAge, characterGender, referenceImages);
+        if (!result.cuts || result.cuts.length === 0) throw new Error('대본 생성 실패');
+        currentMeta = result.meta;
+        currentCuts = result.cuts.map((c, i) => ({ ...c, id: `cut-${i}` }));
+        setScriptMeta(currentMeta);
         setCuts(currentCuts);
       }
-      
+
       const totalTasks = currentCuts.length * 3;
       let completedTasks = 0;
-      
+
       const updateProgress = () => {
         completedTasks++;
         setAutoProgress(Math.round((completedTasks / totalTasks) * 100));
@@ -479,8 +603,10 @@ export default function App() {
         if (!currentCuts[i].audioUrl) {
           setAutoStatusText(`컷 ${i + 1}/${currentCuts.length} 음성 생성 중...`);
           try {
-            const url = await generateAudio(currentCuts[i].text, voice);
+            const url = await generateAudio(currentCuts[i].text, voice, currentCuts[i].emotion);
+            const dur = await getAudioDuration(url);
             currentCuts[i].audioUrl = url;
+            currentCuts[i].audioDuration = dur;
             setCuts([...currentCuts]);
           } catch (e) { console.error(e); }
         }
@@ -492,7 +618,8 @@ export default function App() {
         if (!currentCuts[i].imageUrl) {
           setAutoStatusText(`컷 ${i + 1}/${currentCuts.length} 이미지 생성 중...`);
           try {
-            const url = await generateImage(currentCuts[i].imagePrompt, ratio);
+            const refs = getReferenceImagesForCut(currentCuts, i, referenceImages);
+            const url = await generateImage(currentCuts[i].imagePrompt, ratio, refs, currentMeta?.characterSheet);
             currentCuts[i].imageUrl = url;
             setCuts([...currentCuts]);
           } catch (e) { console.error(e); }
@@ -549,8 +676,9 @@ export default function App() {
     const cut = cuts[index];
     updateCut(index, { isGeneratingAudio: true });
     try {
-      const url = await generateAudio(cut.text, voice);
-      updateCut(index, { audioUrl: url, isGeneratingAudio: false });
+      const url = await generateAudio(cut.text, voice, cut.emotion);
+      const dur = await getAudioDuration(url);
+      updateCut(index, { audioUrl: url, audioDuration: dur, isGeneratingAudio: false });
     } catch (e: any) {
       updateCut(index, { isGeneratingAudio: false });
       handleError(e, '음성 생성 실패');
@@ -561,7 +689,8 @@ export default function App() {
     const cut = cuts[index];
     updateCut(index, { isGeneratingImage: true });
     try {
-      const url = await generateImage(cut.imagePrompt, ratio);
+      const refs = getReferenceImagesForCut(cuts, index, referenceImages);
+      const url = await generateImage(cut.imagePrompt, ratio, refs, scriptMeta?.characterSheet);
       updateCut(index, { imageUrl: url, isGeneratingImage: false });
     } catch (e: any) {
       updateCut(index, { isGeneratingImage: false });
@@ -585,28 +714,51 @@ export default function App() {
     }
   };
 
-  const allVideosReady = cuts.length > 0 && cuts.every(c => c.videoUrl);
+  const handleGenerateThumbnail = async () => {
+    if (!scriptMeta?.thumbnailPrompt) return;
+    setIsGeneratingThumbnail(true);
+    try {
+      const url = await generateImage(scriptMeta.thumbnailPrompt, ratio, referenceImages.slice(0, 2), scriptMeta.characterSheet);
+      setThumbnailUrl(url);
+    } catch (e: any) {
+      handleError(e, '썸네일 생성 실패');
+    }
+    setIsGeneratingThumbnail(false);
+  };
+
+  const allMediaReady = cuts.length > 0 && cuts.every(c => (c.videoUrl || c.imageUrl) && c.audioUrl);
   const allAudiosReady = cuts.length > 0 && cuts.every(c => c.audioUrl);
 
   const handlePlay = () => {
-    if (!allVideosReady || !allAudiosReady) {
-      showToast('모든 컷의 영상과 음성이 생성되어야 합니다.', 'error');
+    if (!allMediaReady) {
+      showToast('모든 컷의 영상(또는 이미지)과 음성이 생성되어야 합니다.', 'error');
       return;
     }
     setIsPlaying(true);
     setCurrentCutIndex(0);
+    setPlaybackTime(0);
   };
 
   useEffect(() => {
-    if (isPlaying && videoRef.current) {
-      videoRef.current.play().catch(e => console.error(e));
-      if (audioRef.current) {
-        audioRef.current.play().catch(e => console.error(e));
-      }
+    if (isPlaying) {
+      if (videoRef.current) videoRef.current.play().catch(e => console.error(e));
+      if (audioRef.current) audioRef.current.play().catch(e => console.error(e));
     }
   }, [currentCutIndex, isPlaying]);
 
-  const handleVideoEnded = () => {
+  useEffect(() => {
+    if (bgmRef.current) {
+      bgmRef.current.volume = (bgmVolume / 100) * 0.6;
+      if (isPlaying && bgmUrl) {
+        bgmRef.current.currentTime = 0;
+        bgmRef.current.play().catch(() => {});
+      } else {
+        bgmRef.current.pause();
+      }
+    }
+  }, [isPlaying, bgmUrl, bgmVolume]);
+
+  const handleCutEnded = () => {
     if (currentCutIndex < cuts.length - 1) {
       setCurrentCutIndex(prev => prev + 1);
     } else {
@@ -614,45 +766,57 @@ export default function App() {
     }
   };
 
+  // Safety net: if the audio 'ended' event never fires (decode error, etc.),
+  // force-advance so a single bad cut can't freeze the whole playback/render.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const cut = cuts[currentCutIndex];
+    const timeoutMs = ((cut?.audioDuration || 5) + 1.5) * 1000;
+    const t = window.setTimeout(() => {
+      handleCutEnded();
+    }, timeoutMs);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCutIndex, isPlaying]);
+
   const downloadSRT = () => {
-    let srt = '';
-    let time = 0;
-    cuts.forEach((cut, i) => {
-      const formatTime = (s: number) => {
-        const h = Math.floor(s / 3600).toString().padStart(2, '0');
-        const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
-        const sec = Math.floor(s % 60).toString().padStart(2, '0');
-        return `${h}:${m}:${sec},000`;
-      };
-      const start = formatTime(time);
-      time += 3; // Mock duration
-      const end = formatTime(time);
-      srt += `${i + 1}\n${start} --> ${end}\n${cut.text}\n\n`;
-    });
-    
+    const srt = buildSRT(cuts);
     const blob = new Blob([srt], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'subtitles.srt';
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleDownloadMP4 = async (resolution: '1080p' | '720p' | '480p' = '1080p') => {
-    if (!allVideosReady || !allAudiosReady) {
-      showToast('모든 컷의 영상과 음성이 생성되어야 합니다.', 'error');
+    if (!allMediaReady) {
+      showToast('모든 컷의 영상(또는 이미지)과 음성이 생성되어야 합니다.', 'error');
       return;
     }
-    
+
+    // Preload any image-only cuts so the canvas has a decoded bitmap to draw (Ken Burns fallback).
+    for (const cut of cuts) {
+      if (!cut.videoUrl && cut.imageUrl && !kenBurnsImagesRef.current[cut.id]) {
+        try {
+          kenBurnsImagesRef.current[cut.id] = await loadImageElement(cut.imageUrl);
+        } catch (e) {
+          console.warn('Ken Burns 이미지 프리로드 실패', e);
+        }
+      }
+    }
+
     setIsRendering(true);
     setRenderingProgress(0);
     setIsPlaying(true);
     setCurrentCutIndex(0);
-    
+
     // Initialize audio context synchronously to preserve user gesture
     let audioCtx: AudioContext | null = null;
     let audioClone: HTMLAudioElement | null = null;
     let dest: MediaStreamAudioDestinationNode | null = null;
+    let bgmAudio: HTMLAudioElement | null = null;
     try {
       audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       dest = audioCtx.createMediaStreamDestination();
@@ -662,34 +826,47 @@ export default function App() {
       const source = audioCtx.createMediaElementSource(audioClone);
       source.connect(dest);
       source.connect(audioCtx.destination);
+
+      if (bgmUrl) {
+        bgmAudio = new Audio(bgmUrl);
+        bgmAudio.loop = true;
+        bgmAudio.crossOrigin = 'anonymous';
+        const bgmGain = audioCtx.createGain();
+        bgmGain.gain.value = (bgmVolume / 100) * 0.5;
+        const bgmSource = audioCtx.createMediaElementSource(bgmAudio);
+        bgmSource.connect(bgmGain);
+        bgmGain.connect(dest);
+        bgmAudio.play().catch(e => console.warn('BGM play failed', e));
+      }
     } catch (e) {
       console.warn('Audio mixing not supported or failed', e);
     }
-    
+
     setTimeout(async () => {
-      if (!videoRef.current || !audioRef.current) return;
-      
+      if (!videoRef.current && cuts.some(c => c.videoUrl)) return;
+      if (!audioRef.current) return;
+
       const canvas = document.createElement('canvas');
       let width = 1920;
       let height = 1080;
-      
+
       if (resolution === '720p') { width = 1280; height = 720; }
       if (resolution === '480p') { width = 854; height = 480; }
 
-      if (ratio === '9:16') { 
-        const temp = width; width = height; height = temp; 
+      if (ratio === '9:16') {
+        const temp = width; width = height; height = temp;
       }
-      else if (ratio === '1:1') { 
-        width = height; 
+      else if (ratio === '1:1') {
+        width = height;
       }
-      else if (ratio === '3:4') { 
-        width = Math.round(height * 0.75); 
+      else if (ratio === '3:4') {
+        width = Math.round(height * 0.75);
       }
-      
+
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
-      
+
       const canvasStream = (canvas as any).captureStream ? (canvas as any).captureStream(30) : (canvas as any).webkitCaptureStream ? (canvas as any).webkitCaptureStream(30) : null;
       if (!canvasStream) {
         showToast('이 브라우저에서는 영상 렌더링을 지원하지 않습니다. Chrome을 사용해주세요.', 'error');
@@ -697,11 +874,11 @@ export default function App() {
         setIsRendering(false);
         return;
       }
-      
+
       // Audio mixing
       if (dest && audioClone) {
         audioRef.current.muted = true; // Mute main audio so we don't hear double
-        
+
         const syncAudio = () => {
           if (audioClone && audioRef.current) {
             if (audioClone.src !== audioRef.current.src) {
@@ -711,7 +888,7 @@ export default function App() {
             }
           }
         };
-        
+
         audioRef.current.addEventListener('play', syncAudio);
         audioRef.current.addEventListener('timeupdate', () => {
           if (audioClone && audioRef.current && Math.abs(audioClone.currentTime - audioRef.current.currentTime) > 0.3) {
@@ -721,7 +898,7 @@ export default function App() {
         // Also sync on source change
         audioRef.current.addEventListener('loadedmetadata', syncAudio);
       }
-      
+
       const combinedStream = new MediaStream([
         ...canvasStream.getVideoTracks(),
         ...(dest ? dest.stream.getAudioTracks() : [])
@@ -741,19 +918,26 @@ export default function App() {
           break;
         }
       }
-      
-      const recorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
+
+      const recorder = new MediaRecorder(combinedStream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: resolution === '1080p' ? 12_000_000 : resolution === '720p' ? 8_000_000 : 4_000_000,
+      });
       const chunks: Blob[] = [];
-      
+
       recorder.ondataavailable = e => {
         if (e.data.size > 0) chunks.push(e.data);
       };
-      
+
       recorder.onstop = () => {
         if (audioRef.current) audioRef.current.muted = false;
         if (audioClone) {
           audioClone.pause();
           audioClone.src = '';
+        }
+        if (bgmAudio) {
+          bgmAudio.pause();
+          bgmAudio.src = '';
         }
         const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
         const url = URL.createObjectURL(blob);
@@ -768,7 +952,7 @@ export default function App() {
         setIsRendering(false);
         showToast('다운로드가 완료되었습니다.', 'success');
       };
-      
+
       try {
         recorder.start();
       } catch (e) {
@@ -778,47 +962,52 @@ export default function App() {
         setIsRendering(false);
         return;
       }
-      
-      const totalDuration = cuts.reduce((acc, cut) => acc + (audioRef.current?.duration || 5), 0);
+
+      const totalDuration = cuts.reduce((acc, cut) => acc + (cut.audioDuration || 5), 0);
       let startTime = Date.now();
 
       const drawFrame = () => {
-        if (ctx && videoRef.current) {
-          // object-cover logic
-          const videoRatio = videoRef.current.videoWidth / videoRef.current.videoHeight;
-          const canvasRatio = width / height;
-          let drawWidth = width;
-          let drawHeight = height;
-          let offsetX = 0;
-          let offsetY = 0;
+        if (ctx) {
+          const cut = cuts[currentCutIndexRef.current];
+          const cutDuration = cut?.audioDuration || 5;
+          const currentTime = audioRef.current?.currentTime || 0;
+          const cutProgress = Math.min(Math.max(currentTime / cutDuration, 0), 1);
 
-          if (videoRatio > canvasRatio) {
-            drawWidth = height * videoRatio;
-            offsetX = (width - drawWidth) / 2;
-          } else {
-            drawHeight = width / videoRatio;
-            offsetY = (height - drawHeight) / 2;
-          }
-
-          // Clear canvas first
           ctx.fillStyle = 'black';
           ctx.fillRect(0, 0, width, height);
-          
-          // Draw video as cover background
-          ctx.drawImage(videoRef.current, offsetX, offsetY, drawWidth, drawHeight);
-          
-          if (includeSubtitles) {
-            const text = cuts[currentCutIndexRef.current]?.text || '';
-            // Subtitle background
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.fillRect(0, height - (height * 0.18), width, height * 0.18); // Fill to the bottom
-            
-            // Subtitle text
-            ctx.fillStyle = 'white';
-            ctx.font = `bold ${Math.round(height * 0.04)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(text, width / 2, height - (height * 0.09));
+
+          if (cut?.videoUrl && videoRef.current) {
+            // object-cover logic
+            const videoRatio = videoRef.current.videoWidth / videoRef.current.videoHeight;
+            const canvasRatio = width / height;
+            let drawWidth = width;
+            let drawHeight = height;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (videoRatio > canvasRatio) {
+              drawWidth = height * videoRatio;
+              offsetX = (width - drawWidth) / 2;
+            } else {
+              drawHeight = width / videoRatio;
+              offsetY = (height - drawHeight) / 2;
+            }
+
+            ctx.drawImage(videoRef.current, offsetX, offsetY, drawWidth, drawHeight);
+          } else if (cut) {
+            const imgEl = kenBurnsImagesRef.current[cut.id];
+            if (imgEl && imgEl.naturalWidth > 0) {
+              const variant = (currentCutIndexRef.current % 2) as 0 | 1;
+              const rect = computeKenBurnsRect(imgEl.naturalWidth, imgEl.naturalHeight, width, height, cutProgress, variant);
+              ctx.drawImage(imgEl, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, width, height);
+            }
+          }
+
+          if (includeSubtitles && cut) {
+            const words = getWordList(cut.text);
+            const activeIdx = getActiveWordIndex(words, currentTime, cutDuration);
+            const fontSize = Math.round(height * 0.045);
+            drawWrappedCaption(ctx, words, activeIdx, width / 2, height * 0.68, width * 0.86, fontSize);
           }
 
           // Update progress
@@ -826,14 +1015,14 @@ export default function App() {
           const progress = Math.min(Math.round((elapsed / totalDuration) * 100), 99);
           setRenderingProgress(progress);
         }
-        
+
         if (recorder.state === 'recording') {
           requestAnimationFrame(drawFrame);
         }
       };
-      
+
       drawFrame();
-      
+
       // Stop recorder when all cuts are done
       const checkEnd = setInterval(() => {
         if (!isPlayingRef.current) {
@@ -843,7 +1032,7 @@ export default function App() {
           clearInterval(checkEnd);
         }
       }, 1000);
-      
+
     }, 500);
   };
 
@@ -867,11 +1056,11 @@ export default function App() {
         </div>
       )}
 
-      <ApiKeyModal 
-        isOpen={isApiKeyModalOpen} 
-        onClose={() => setIsApiKeyModalOpen(false)} 
-        onKeySelected={handleKeySelected} 
-        currentKey={currentApiKey} 
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onKeySelected={handleKeySelected}
+        currentKey={currentApiKey}
       />
 
       <ApiCostModal
@@ -879,9 +1068,9 @@ export default function App() {
         onClose={() => setIsApiCostModalOpen(false)}
       />
 
-      <RenderingModal 
-        isOpen={isRendering} 
-        progress={renderingProgress} 
+      <RenderingModal
+        isOpen={isRendering}
+        progress={renderingProgress}
       />
 
       {isHelpModalOpen && (
@@ -897,13 +1086,15 @@ export default function App() {
             <div className="space-y-4 text-zinc-300 text-sm leading-relaxed max-h-[60vh] overflow-y-auto pr-2">
               <p><strong className="text-white">1. API 키 설정:</strong> 좌측 하단의 'API KEY 설정' 버튼을 눌러 Gemini API 키를 입력합니다.</p>
               <p><strong className="text-white">2. 주제 입력:</strong> 만들고 싶은 영상의 주제를 입력하고 영상 비율, 스타일 등을 선택합니다.</p>
-              <p><strong className="text-white">3. 대본 생성:</strong> '대본 생성' 버튼을 누르면 AI가 자동으로 컷별 대본과 이미지/영상 프롬프트를 작성합니다.</p>
+              <p><strong className="text-white">3. 대본 생성:</strong> '대본 생성' 버튼을 누르면 AI가 훅-오픈루프-루프엔딩 구조의 컷별 대본과 이미지/영상 프롬프트, 제목·썸네일·설명 등 업로드 패키지를 함께 작성합니다.</p>
               <p><strong className="text-white">4. 음성/이미지/영상 생성:</strong> 각 단계별로 생성 버튼을 누르거나, '전체 자동화' 버튼을 눌러 한 번에 모든 소스를 생성합니다.</p>
-              <p><strong className="text-white">5. 최종 확인 및 렌더링:</strong> 마지막 단계에서 생성된 영상을 미리보기하고, 원하는 화질로 다운로드합니다.</p>
+              <p><strong className="text-white">5. 최종 확인 및 렌더링:</strong> 마지막 단계에서 생성된 영상을 미리보기하고, BGM과 자막을 설정한 뒤 원하는 화질로 다운로드합니다.</p>
               <div className="mt-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
                 <p className="text-red-400 font-medium mb-1 flex items-center gap-1">💡 팁</p>
                 <ul className="list-disc list-inside space-y-1 text-red-300/80">
                   <li>참조 이미지를 업로드하면 생성되는 이미지와 영상의 스타일을 일정하게 유지할 수 있습니다.</li>
+                  <li>영상이 없는 컷은 이미지 + Ken Burns 효과로 자동 재생/렌더링됩니다.</li>
+                  <li>작업 내용은 브라우저에 자동 저장되어, 새로고침해도 이어서 작업할 수 있습니다.</li>
                   <li>마음에 들지 않는 컷은 각 단계에서 개별적으로 '재생성'할 수 있습니다.</li>
                 </ul>
               </div>
@@ -920,13 +1111,13 @@ export default function App() {
               모든 작업 내용이 초기화됩니다.<br/>새로 만드시겠습니까?
             </p>
             <div className="flex gap-3 justify-center">
-              <button 
+              <button
                 onClick={() => setIsResetModalOpen(false)}
                 className="px-6 py-2 rounded-lg bg-zinc-800 text-white hover:bg-zinc-700 transition-colors text-sm font-medium"
               >
                 취소
               </button>
-              <button 
+              <button
                 onClick={executeReset}
                 className="px-6 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors text-sm font-medium"
               >
@@ -936,13 +1127,13 @@ export default function App() {
           </div>
         </div>
       )}
-      
+
       {(isAutoGenerating || isManualGenerating) && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-900/90 p-8 rounded-3xl border border-white/10 shadow-2xl max-w-lg w-full space-y-8 relative overflow-hidden">
             {/* Background glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-32 bg-indigo-500/20 blur-[100px] pointer-events-none" />
-            
+
             <div className="text-center space-y-2 relative z-10">
               <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse" />
@@ -956,9 +1147,9 @@ export default function App() {
                 <span className="text-indigo-400">{autoStatusText}</span>
                 <span className="text-white">{autoProgress}%</span>
               </div>
-              
+
               <div className="h-3 bg-zinc-950 rounded-full overflow-hidden border border-white/5">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out relative overflow-hidden"
                   style={{ width: `${autoProgress}%` }}
                 >
@@ -982,14 +1173,14 @@ export default function App() {
                 </div>
               </div>
             </div>
-            
+
             <p className="text-center text-xs text-zinc-500 relative z-10">
               이 작업은 설정에 따라 수 분 정도 소요될 수 있습니다. 창을 닫지 마세요.
             </p>
           </div>
         </div>
       )}
-      
+
       {/* Sidebar */}
       <aside className="w-64 border-r border-white/10 bg-zinc-900/50 flex flex-col fixed inset-y-0 left-0 z-40">
         <div className="h-16 flex items-center gap-3 px-6 border-b border-white/10">
@@ -1003,7 +1194,7 @@ export default function App() {
             const Icon = step.icon;
             const isActive = currentStep === step.id;
             const isDisabled = step.id > 1 && cuts.length === 0;
-            
+
             let isCompleted = false;
             if (cuts.length > 0) {
               if (step.id === 1) isCompleted = true;
@@ -1018,7 +1209,7 @@ export default function App() {
                 onClick={() => !isDisabled && setCurrentStep(step.id)}
                 disabled={isDisabled}
                 className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-sm font-medium ${
-                  isActive ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' : 
+                  isActive ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' :
                   isDisabled ? 'opacity-50 cursor-not-allowed text-zinc-500' : 'text-zinc-400 hover:bg-white/5 hover:text-white'
                 }`}
               >
@@ -1034,7 +1225,7 @@ export default function App() {
             );
           })}
         </nav>
-        
+
         <div className="p-4 space-y-2 border-t border-white/10">
           <button
             onClick={handleReset}
@@ -1057,8 +1248,8 @@ export default function App() {
           <button
             onClick={() => setIsApiKeyModalOpen(true)}
             className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-sm font-medium border ${
-              hasKey 
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20' 
+              hasKey
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
                 : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20'
             }`}
           >
@@ -1073,10 +1264,10 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 ml-64 p-8 max-w-4xl mx-auto w-full relative">
-        
+
         {/* Top Right API Cost Button */}
         <div className="absolute top-8 right-8 z-30">
-          <button 
+          <button
             onClick={() => setIsApiCostModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-full text-sm font-medium border border-white/10 backdrop-blur-md transition-all shadow-lg"
           >
@@ -1113,7 +1304,7 @@ export default function App() {
             <h2 className="text-2xl font-semibold flex items-center gap-2">
               <span className="text-indigo-400">1.</span> 영상 설정 및 대본
             </h2>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-3">
                 <label className="text-sm font-medium text-zinc-400">영상 비율</label>
@@ -1181,7 +1372,7 @@ export default function App() {
                 </label>
                 <div className="flex items-center gap-2">
                   {referenceImages.length > 0 && (
-                    <button 
+                    <button
                       onClick={handleOneTouchPlanning}
                       disabled={isPlanning || isGenerating || isAutoGenerating}
                       className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/10"
@@ -1197,7 +1388,7 @@ export default function App() {
                 {referenceImages.map((img, i) => (
                   <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-white/10 group">
                     <img src={img} alt={`Ref ${i}`} className="w-full h-full object-cover" />
-                    <button 
+                    <button
                       onClick={() => removeReferenceImage(i)}
                       className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     >
@@ -1220,7 +1411,7 @@ export default function App() {
 
             <div className="space-y-3">
               <label className="text-sm font-medium text-zinc-400">주제 및 대본 입력</label>
-              <textarea 
+              <textarea
                 value={topic} onChange={e => setTopic(e.target.value)}
                 placeholder="예: 인공지능이 세상을 바꾸는 5가지 방법"
                 className="w-full bg-zinc-950 border border-white/10 rounded-xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none h-24"
@@ -1252,9 +1443,9 @@ export default function App() {
                     <option value="custom">직접 입력</option>
                   </select>
                   {durationCategory === 'custom' && (
-                    <input 
-                      type="number" 
-                      value={duration} 
+                    <input
+                      type="number"
+                      value={duration}
                       onChange={e => setDuration(Number(e.target.value))}
                       placeholder="초"
                       className="w-24 bg-zinc-950 border border-white/10 rounded-xl p-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -1263,21 +1454,21 @@ export default function App() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button 
+                <button
                   onClick={handleGenerateScript} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
                   className="h-[50px] px-6 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2"
                 >
                   {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
                   대본 생성
                 </button>
-                <button 
+                <button
                   onClick={handleManualProceed} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
                   className="h-[50px] px-6 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 border border-white/10"
                 >
                   {isManualGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
                   수동으로 순서대로 진행하기
                 </button>
-                <button 
+                <button
                   onClick={handleAutoGenerateAll} disabled={isGenerating || isAutoGenerating || isManualGenerating || !topic}
                   className="h-[50px] px-6 bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-xl font-semibold hover:from-indigo-400 hover:to-purple-400 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-indigo-500/20"
                 >
@@ -1286,10 +1477,10 @@ export default function App() {
                 </button>
               </div>
             </div>
-            
+
             {cuts.length > 0 && (
               <div className="pt-4 border-t border-white/10 flex justify-end">
-                <button 
+                <button
                   onClick={() => setCurrentStep(2)}
                   className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-500 transition-all"
                 >
@@ -1307,7 +1498,7 @@ export default function App() {
                 <span className="text-indigo-400">2.</span> 음성 생성
               </h2>
               <div className="flex gap-2">
-                <button 
+                <button
                   onClick={handleManualProceed}
                   disabled={isManualGenerating || isAutoGenerating}
                   className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
@@ -1315,18 +1506,21 @@ export default function App() {
                   {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   수동으로 다음 단계 진행
                 </button>
-                <button 
+                <button
                   onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
+                  const newCuts = [...cuts];
                   let completed = 0;
-                  const total = cuts.length;
-                  for (let i = 0; i < cuts.length; i++) {
-                    if (!cuts[i].audioUrl) {
-                      setAutoStatusText(`컷 ${i + 1}/${cuts.length} 음성 생성 중...`);
+                  const total = newCuts.length;
+                  for (let i = 0; i < newCuts.length; i++) {
+                    if (!newCuts[i].audioUrl) {
+                      setAutoStatusText(`컷 ${i + 1}/${newCuts.length} 음성 생성 중...`);
                       try {
-                        const url = await generateAudio(cuts[i].text, voice);
-                        updateCut(i, { audioUrl: url });
+                        const url = await generateAudio(newCuts[i].text, voice, newCuts[i].emotion);
+                        const dur = await getAudioDuration(url);
+                        newCuts[i] = { ...newCuts[i], audioUrl: url, audioDuration: dur };
+                        setCuts([...newCuts]);
                       } catch (e) {
                         console.error(e);
                       }
@@ -1365,7 +1559,7 @@ export default function App() {
                   { id: 'Orion', label: '오리온', desc: '남성 · 신뢰감' },
                   { id: 'Lyra', label: '라이라', desc: '여성 · 발랄함' },
                 ] as const).map(v => (
-                  <button 
+                  <button
                     key={v.id} onClick={() => setVoice(v.id as Voice)}
                     className={`p-3 rounded-xl border text-left transition-all ${voice === v.id ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/10 bg-zinc-950 hover:border-white/20'}`}
                   >
@@ -1383,7 +1577,12 @@ export default function App() {
                     {index + 1}
                   </div>
                   <div className="flex-1 space-y-2">
-                    <textarea 
+                    {cut.emotion && (
+                      <span className="inline-block px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-[10px] font-medium">
+                        톤: {cut.emotion}
+                      </span>
+                    )}
+                    <textarea
                       value={cut.text}
                       onChange={e => updateCut(index, { text: e.target.value })}
                       className="w-full bg-transparent border border-white/10 rounded-lg text-white focus:ring-1 focus:ring-indigo-500 p-2 resize-none h-20 text-sm"
@@ -1403,7 +1602,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            
+
             <div className="pt-4 border-t border-white/10 flex justify-between">
               <button onClick={() => setCurrentStep(1)} className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all">이전 단계</button>
               <button onClick={() => setCurrentStep(3)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-500 transition-all">다음 단계로</button>
@@ -1418,7 +1617,7 @@ export default function App() {
                 <span className="text-indigo-400">3.</span> 이미지 생성
               </h2>
               <div className="flex gap-2">
-                <button 
+                <button
                   onClick={handleManualProceed}
                   disabled={isManualGenerating || isAutoGenerating}
                   className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
@@ -1426,18 +1625,21 @@ export default function App() {
                   {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   수동으로 다음 단계 진행
                 </button>
-                <button 
+                <button
                   onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
+                  const newCuts = [...cuts];
                   let completed = 0;
-                  const total = cuts.length;
-                  for (let i = 0; i < cuts.length; i++) {
-                    if (!cuts[i].imageUrl) {
-                      setAutoStatusText(`컷 ${i + 1}/${cuts.length} 이미지 생성 중...`);
+                  const total = newCuts.length;
+                  for (let i = 0; i < newCuts.length; i++) {
+                    if (!newCuts[i].imageUrl) {
+                      setAutoStatusText(`컷 ${i + 1}/${newCuts.length} 이미지 생성 중...`);
                       try {
-                        const url = await generateImage(cuts[i].imagePrompt, ratio);
-                        updateCut(i, { imageUrl: url });
+                        const refs = getReferenceImagesForCut(newCuts, i, referenceImages);
+                        const url = await generateImage(newCuts[i].imagePrompt, ratio, refs, scriptMeta?.characterSheet);
+                        newCuts[i] = { ...newCuts[i], imageUrl: url };
+                        setCuts([...newCuts]);
                       } catch (e) {
                         console.error(e);
                       }
@@ -1478,7 +1680,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <textarea 
+                  <textarea
                     value={cut.imagePrompt}
                     onChange={e => updateCut(index, { imagePrompt: e.target.value })}
                     className="w-full bg-transparent border border-white/10 rounded-lg text-zinc-400 focus:ring-1 focus:ring-indigo-500 p-2 resize-none h-20 text-xs"
@@ -1486,7 +1688,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            
+
             <div className="pt-4 border-t border-white/10 flex justify-between">
               <button onClick={() => setCurrentStep(2)} className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all">이전 단계</button>
               <button onClick={() => setCurrentStep(4)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-500 transition-all">다음 단계로</button>
@@ -1501,7 +1703,7 @@ export default function App() {
                 <span className="text-indigo-400">4.</span> 영상 생성
               </h2>
               <div className="flex gap-2">
-                <button 
+                <button
                   onClick={handleManualProceed}
                   disabled={isManualGenerating || isAutoGenerating}
                   className="px-4 py-2 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all disabled:opacity-50 flex items-center gap-2 text-sm border border-white/10"
@@ -1509,18 +1711,20 @@ export default function App() {
                   {isManualGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   수동으로 다음 단계 진행
                 </button>
-                <button 
+                <button
                   onClick={async () => {
                   setIsAutoGenerating(true);
                   setAutoProgress(0);
+                  const newCuts = [...cuts];
                   let completed = 0;
-                  const total = cuts.length;
-                  for (let i = 0; i < cuts.length; i++) {
-                    if (!cuts[i].videoUrl && cuts[i].imageUrl) {
-                      setAutoStatusText(`컷 ${i + 1}/${cuts.length} 영상 생성 중...`);
+                  const total = newCuts.length;
+                  for (let i = 0; i < newCuts.length; i++) {
+                    if (!newCuts[i].videoUrl && newCuts[i].imageUrl) {
+                      setAutoStatusText(`컷 ${i + 1}/${newCuts.length} 영상 생성 중...`);
                       try {
-                        const url = await generateVideo(cuts[i].imageUrl!, cuts[i].videoPrompt, ratio, referenceImages);
-                        updateCut(i, { videoUrl: url });
+                        const url = await generateVideo(newCuts[i].imageUrl!, newCuts[i].videoPrompt, ratio, referenceImages);
+                        newCuts[i] = { ...newCuts[i], videoUrl: url };
+                        setCuts([...newCuts]);
                       } catch (e) {
                         console.error(e);
                       }
@@ -1538,6 +1742,10 @@ export default function App() {
               </button>
             </div>
           </div>
+
+            <p className="text-xs text-zinc-500 -mt-2">
+              영상 생성은 선택 사항입니다. 건너뛴 컷은 이미지 + Ken Burns(줌/팬) 효과로 자동 재생 및 렌더링됩니다.
+            </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {cuts.map((cut, index) => (
@@ -1564,7 +1772,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <textarea 
+                  <textarea
                     value={cut.videoPrompt}
                     onChange={e => updateCut(index, { videoPrompt: e.target.value })}
                     className="w-full bg-transparent border border-white/10 rounded-lg text-zinc-400 focus:ring-1 focus:ring-indigo-500 p-2 resize-none h-20 text-xs"
@@ -1572,7 +1780,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            
+
             <div className="pt-4 border-t border-white/10 flex justify-between">
               <button onClick={() => setCurrentStep(3)} className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all">이전 단계</button>
               <button onClick={() => setCurrentStep(5)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-500 transition-all">다음 단계로</button>
@@ -1586,8 +1794,8 @@ export default function App() {
               <span className="text-indigo-400">5.</span> 최종 확인 및 렌더링
             </h2>
 
-            <div className="flex items-center gap-6">
-              <button 
+            <div className="flex flex-wrap items-center gap-6">
+              <button
                 onClick={() => setIncludeSubtitles(!includeSubtitles)}
                 className="flex items-center gap-2 text-sm text-zinc-300 hover:text-white"
               >
@@ -1595,73 +1803,228 @@ export default function App() {
                 자막 포함하여 렌더링
               </button>
 
-              {!includeSubtitles && (
-                <button onClick={downloadSRT} className="text-sm text-indigo-400 hover:underline flex items-center gap-1">
-                  <Download className="w-4 h-4" /> SRT 자막 다운로드
-                </button>
+              <button onClick={downloadSRT} className="text-sm text-indigo-400 hover:underline flex items-center gap-1">
+                <Download className="w-4 h-4" /> SRT 자막 다운로드
+              </button>
+            </div>
+
+            {/* BGM controls */}
+            <div className="bg-zinc-950 border border-white/5 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                  <Music className="w-4 h-4 text-indigo-400" /> 배경음악 (BGM)
+                </label>
+                {bgmUrl && <button onClick={removeBgm} className="text-xs text-zinc-500 hover:text-red-400">제거</button>}
+              </div>
+              {!bgmUrl ? (
+                <label className="flex items-center justify-center gap-2 w-full h-12 rounded-lg border border-dashed border-white/20 cursor-pointer hover:bg-white/5 text-sm text-zinc-400 transition-colors">
+                  <PlusCircle className="w-4 h-4" /> 저작권 프리 BGM 파일 업로드 (mp3, wav)
+                  <input type="file" accept="audio/*" className="hidden" onChange={handleBgmUpload} />
+                </label>
+              ) : (
+                <div className="space-y-2">
+                  <audio src={bgmUrl} controls className="w-full h-8" />
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-zinc-500 w-20 shrink-0">볼륨 {bgmVolume}%</span>
+                    <input type="range" min={0} max={100} value={bgmVolume} onChange={e => setBgmVolume(Number(e.target.value))} className="flex-1" />
+                  </div>
+                </div>
               )}
             </div>
 
             <div className={`bg-black rounded-2xl overflow-hidden relative border border-white/10 max-w-3xl mx-auto flex items-center justify-center ${ratio === '9:16' ? 'aspect-[9/16] max-h-[800px]' : ratio === '1:1' ? 'aspect-square max-h-[600px]' : ratio === '3:4' ? 'aspect-[3/4] max-h-[800px]' : 'aspect-video'}`}>
               {!isPlaying ? (
                 <div className="text-center space-y-4">
-                  <button 
+                  <button
                     onClick={handlePlay}
-                    disabled={!allVideosReady || !allAudiosReady}
+                    disabled={!allMediaReady}
                     className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center mx-auto hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
                   >
                     <Play className="w-8 h-8 ml-1" />
                   </button>
                   <p className="text-sm text-zinc-500">
-                    {allVideosReady && allAudiosReady ? '최종 영상 미리보기' : '모든 영상과 음성을 생성해주세요'}
+                    {allMediaReady ? '최종 영상 미리보기' : '모든 컷의 영상(또는 이미지)과 음성을 생성해주세요'}
                   </p>
                 </div>
               ) : (
                 <>
-                  <video 
-                    ref={videoRef}
-                    src={cuts[currentCutIndex].videoUrl}
-                    onEnded={handleVideoEnded}
-                    className="w-full h-full object-cover"
-                  />
-                  <audio 
+                  {cuts[currentCutIndex].videoUrl ? (
+                    <video
+                      ref={videoRef}
+                      src={cuts[currentCutIndex].videoUrl}
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  ) : cuts[currentCutIndex].imageUrl ? (
+                    <img
+                      key={currentCutIndex}
+                      src={cuts[currentCutIndex].imageUrl}
+                      className={`w-full h-full object-cover ${currentCutIndex % 2 === 0 ? 'animate-kenburns-a' : 'animate-kenburns-b'}`}
+                      style={{ animationDuration: `${cuts[currentCutIndex].audioDuration || 5}s` }}
+                    />
+                  ) : null}
+                  <audio
                     ref={audioRef}
                     src={cuts[currentCutIndex].audioUrl}
+                    onEnded={handleCutEnded}
+                    onTimeUpdate={e => setPlaybackTime(e.currentTarget.currentTime)}
                   />
-                  {includeSubtitles && (
-                    <div className="absolute bottom-0 left-0 right-0 h-[18%] bg-black/80 flex items-center justify-center px-8">
-                      <div className="text-white text-lg sm:text-2xl font-bold text-center max-w-2xl">
-                        {cuts[currentCutIndex].text}
+                  <audio ref={bgmRef} src={bgmUrl || undefined} loop style={{ display: 'none' }} />
+                  {includeSubtitles && (() => {
+                    const words = getWordList(cuts[currentCutIndex].text);
+                    const activeIdx = getActiveWordIndex(words, playbackTime, cuts[currentCutIndex].audioDuration || 5);
+                    return (
+                      <div className="absolute inset-x-0 flex justify-center px-6 pointer-events-none" style={{ top: '66%' }}>
+                        <div className="flex flex-wrap justify-center gap-x-2 gap-y-1 max-w-2xl">
+                          {words.map((word, i) => (
+                            <span
+                              key={i}
+                              className="text-lg sm:text-2xl font-extrabold"
+                              style={{
+                                color: i === activeIdx ? '#fde047' : '#ffffff',
+                                textShadow: '0 2px 6px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.9)',
+                              }}
+                            >
+                              {word}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </>
               )}
             </div>
 
+            {/* Upload optimization package */}
+            {scriptMeta && (
+              <div className="bg-zinc-900/60 border border-white/5 rounded-2xl p-6 space-y-6">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-indigo-400" /> 업로드 최적화 패키지
+                </h3>
+
+                {scriptMeta.titles.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-zinc-400">추천 제목</label>
+                    <div className="space-y-2">
+                      {scriptMeta.titles.map((t, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2 bg-zinc-950 border border-white/5 rounded-lg px-3 py-2">
+                          <span className="text-sm text-zinc-200">{t}</span>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(t); showToast('제목을 복사했습니다.', 'success'); }}
+                            className="text-zinc-500 hover:text-white shrink-0"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {scriptMeta.description && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-zinc-400">설명란</label>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(scriptMeta.description); showToast('설명을 복사했습니다.', 'success'); }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      >
+                        <Copy className="w-3 h-3" />복사
+                      </button>
+                    </div>
+                    <textarea readOnly value={scriptMeta.description} className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-sm text-zinc-300 resize-none h-24" />
+                  </div>
+                )}
+
+                {scriptMeta.tags.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-zinc-400">태그</label>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(scriptMeta.tags.join(', ')); showToast('태그를 복사했습니다.', 'success'); }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      >
+                        <Copy className="w-3 h-3" />전체 복사
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {scriptMeta.tags.map((tag, i) => (
+                        <span key={i} className="px-2.5 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-full text-xs">{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {duration > 60 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-zinc-400">타임스탬프 챕터 (설명란에 붙여넣기)</label>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(buildChapters(cuts)); showToast('챕터를 복사했습니다.', 'success'); }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      >
+                        <Copy className="w-3 h-3" />복사
+                      </button>
+                    </div>
+                    <pre className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-xs text-zinc-400 whitespace-pre-wrap max-h-40 overflow-y-auto">{buildChapters(cuts)}</pre>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-zinc-400">썸네일</label>
+                    <button
+                      onClick={handleGenerateThumbnail}
+                      disabled={isGeneratingThumbnail || !scriptMeta.thumbnailPrompt}
+                      className="text-xs bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {isGeneratingThumbnail ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      {thumbnailUrl ? '재생성' : '썸네일 생성'}
+                    </button>
+                  </div>
+                  {thumbnailUrl && (
+                    <div className="space-y-2">
+                      <img src={thumbnailUrl} alt="thumbnail" className="w-full max-w-sm rounded-xl border border-white/10" />
+                      <a href={thumbnailUrl} download={`thumbnail_${Date.now()}.png`} className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300">
+                        <Download className="w-3 h-3" />다운로드
+                      </a>
+                    </div>
+                  )}
+                  {scriptMeta.thumbnailTexts.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {scriptMeta.thumbnailTexts.map((t, i) => (
+                        <span key={i} className="px-2.5 py-1 bg-yellow-500/10 text-yellow-300 border border-yellow-500/20 rounded-full text-xs font-bold">{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-between items-center pt-4 border-t border-white/10">
               <button onClick={() => setCurrentStep(4)} className="px-6 py-3 bg-zinc-800 text-white rounded-xl font-semibold hover:bg-zinc-700 transition-all">이전 단계</button>
-              
+
               <div className="flex gap-2">
-                <button 
+                <button
                   onClick={() => handleDownloadMP4('1080p')}
-                  disabled={!allVideosReady}
+                  disabled={!allMediaReady}
                   className="h-[50px] px-6 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-500 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-indigo-500/20"
                 >
                   <Download className="w-4 h-4" />
                   1080p 다운로드
                 </button>
-                <button 
+                <button
                   onClick={() => handleDownloadMP4('720p')}
-                  disabled={!allVideosReady}
+                  disabled={!allMediaReady}
                   className="h-[50px] px-6 bg-zinc-700 text-white rounded-xl font-semibold hover:bg-zinc-600 transition-all disabled:opacity-50 flex items-center gap-2"
                 >
                   <Download className="w-4 h-4" />
                   720p
                 </button>
-                <button 
+                <button
                   onClick={() => handleDownloadMP4('480p')}
-                  disabled={!allVideosReady}
+                  disabled={!allMediaReady}
                   className="h-[50px] px-6 bg-zinc-700 text-white rounded-xl font-semibold hover:bg-zinc-600 transition-all disabled:opacity-50 flex items-center gap-2"
                 >
                   <Download className="w-4 h-4" />
@@ -1675,16 +2038,16 @@ export default function App() {
 
       {/* Bottom Right Buttons */}
       <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-40">
-        <a 
-          href="https://hyeoksinai.com" 
-          target="_blank" 
+        <a
+          href="https://hyeoksinai.com"
+          target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-2 px-4 py-3 bg-white text-black rounded-full font-bold shadow-2xl hover:scale-105 transition-transform text-sm group"
         >
           <Sparkles className="w-4 h-4 text-indigo-600 group-hover:animate-pulse" />
           혁신AI 플랫폼 바로가기
         </a>
-        <button 
+        <button
           onClick={() => setShowInquiryModal(true)}
           className="flex items-center gap-2 px-4 py-3 bg-zinc-800 text-white rounded-full font-bold shadow-2xl hover:bg-zinc-700 transition-all text-sm border border-white/10"
         >
